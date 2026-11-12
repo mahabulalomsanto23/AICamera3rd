@@ -38,6 +38,8 @@ import java.util.concurrent.Executors
 class MainActivity : AppCompatActivity() {
     private lateinit var preview: PreviewView
     private lateinit var status: TextView
+    private lateinit var aiModeButton: TextView
+    private lateinit var vividModeButton: TextView
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var processingExecutor: ExecutorService
     private lateinit var modelExecutor: ExecutorService
@@ -141,96 +143,161 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(14), dp(18), dp(18))
-            setBackgroundColor(Color.rgb(8, 10, 15))
-        }
+        window.statusBarColor = Color.BLACK
+        window.navigationBarColor = Color.BLACK
 
-        val heading = TextView(this).apply {
-            text = "AI CAMERA PRO"
-            setTextColor(Color.WHITE)
-            textSize = 22f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            gravity = Gravity.CENTER
+        val root = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
         }
-        root.addView(heading, LinearLayout.LayoutParams(-1, dp(34)))
-
-        val subtitle = TextView(this).apply {
-            text = "OFFLINE PHOTO ENHANCEMENT"
-            setTextColor(Color.rgb(150, 165, 185))
-            textSize = 10f
-            gravity = Gravity.CENTER
-            letterSpacing = 0.16f
-        }
-        root.addView(subtitle, LinearLayout.LayoutParams(-1, dp(24)))
 
         preview = PreviewView(this).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            clipToOutline = true
-            background = rounded(Color.rgb(20, 25, 34), 22)
+            setBackgroundColor(Color.BLACK)
         }
-        val previewHeight = (resources.displayMetrics.widthPixels * 1.12f).toInt()
-        root.addView(preview, LinearLayout.LayoutParams(-1, previewHeight).apply {
-            topMargin = dp(10)
-            bottomMargin = dp(12)
-        })
+        root.addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1))
 
-        status = TextView(this).apply {
-            text = "Starting camera and loading AI…"
-            setTextColor(Color.rgb(120, 220, 180))
-            textSize = 11f
-            gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = rounded(Color.rgb(20, 31, 35), 12)
+        // Minimal camera-style top bar: brand at left, compact processing status at right.
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(10), dp(20), dp(10))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x99000000.toInt(), 0x00000000)
+            )
         }
-        root.addView(status, LinearLayout.LayoutParams(-1, dp(42)).apply {
-            bottomMargin = dp(14)
-        })
+        val brand = TextView(this).apply {
+            text = "AI CAMERA"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            letterSpacing = 0.12f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+        topBar.addView(brand, LinearLayout.LayoutParams(0, dp(42), 1f))
+        status = TextView(this).apply {
+            text = "AI • LOADING"
+            setTextColor(Color.WHITE)
+            textSize = 10f
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = rounded(0x66000000, 24)
+            maxLines = 1
+        }
+        topBar.addView(status, LinearLayout.LayoutParams(-2, dp(32)))
+        root.addView(topBar, android.widget.FrameLayout.LayoutParams(-1, dp(76), Gravity.TOP))
+
+        // Camera controls sit over a subtle bottom scrim; the viewfinder stays dominant.
+        val bottomPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(20), dp(28), dp(20), dp(26))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x00000000, 0xCC000000.toInt(), 0xF2000000.toInt())
+            )
+        }
 
         val modeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        modeRow.addView(actionButton("AI MODE", true) {
+        aiModeButton = modeChip("AI", true) {
             mode = ColorEnhancer.Mode.AI
-            setStatus(if (maximEnhancer != null && denoiser != null) "AI MODE SELECTED • NEURAL ENHANCEMENT" else "AI MODE SELECTED • WAITING FOR MODELS")
-        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(6) })
-        modeRow.addView(actionButton("VIVID", false) {
+            updateModeUi()
+            setStatus(if (maximEnhancer != null && denoiser != null) "AI • READY" else "AI • LOADING MODELS")
+        }
+        vividModeButton = modeChip("VIVID", false) {
             mode = ColorEnhancer.Mode.VIVID
-            setStatus("VIVID MODE • COLOR ENHANCEMENT")
-        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(6) })
-        root.addView(modeRow)
+            updateModeUi()
+            setStatus("VIVID • COLOR ENHANCEMENT")
+        }
+        modeRow.addView(aiModeButton, LinearLayout.LayoutParams(dp(104), dp(40)).apply { marginEnd = dp(8) })
+        modeRow.addView(vividModeButton, LinearLayout.LayoutParams(dp(104), dp(40)).apply { marginStart = dp(8) })
+        bottomPanel.addView(modeRow, LinearLayout.LayoutParams(-1, dp(48)).apply {
+            bottomMargin = dp(18)
+        })
 
-        val controls = LinearLayout(this).apply {
+        val captureRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val galleryButton = TextView(this).apply {
+            text = "▧"
+            textSize = 27f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = rounded(0x55333333, 50)
+            setOnClickListener { if (!busy) picker.launch("image/*") }
+        }
+        captureRow.addView(galleryButton, LinearLayout.LayoutParams(dp(54), dp(54)).apply {
+            marginStart = dp(22)
+        })
+        val shutter = android.widget.FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.WHITE)
+                setStroke(dp(4), 0x99FFFFFF.toInt())
+            }
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { takePhoto() }
+        }
+        val shutterInner = android.view.View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.WHITE)
+                setStroke(dp(2), Color.BLACK)
+            }
+        }
+        shutter.addView(shutterInner, android.widget.FrameLayout.LayoutParams(dp(46), dp(46), Gravity.CENTER))
+        captureRow.addView(shutter, LinearLayout.LayoutParams(dp(68), dp(68)).apply {
+            weight = 1f
+            gravity = Gravity.CENTER
+        })
+        val spacer = TextView(this).apply { text = "" }
+        captureRow.addView(spacer, LinearLayout.LayoutParams(dp(54), dp(54)).apply {
+            marginEnd = dp(22)
+        })
+        bottomPanel.addView(captureRow, LinearLayout.LayoutParams(-1, dp(76)))
+
+        val hint = TextView(this).apply {
+            text = "Tap to capture  •  AI enhancement"
+            setTextColor(0xBFFFFFFF.toInt())
+            textSize = 11f
             gravity = Gravity.CENTER
         }
-        controls.addView(actionButton("GALLERY", false) {
-            if (!busy) picker.launch("image/*")
-        }, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginEnd = dp(8) })
-        controls.addView(actionButton("●  CAPTURE", true) {
-            takePhoto()
-        }, LinearLayout.LayoutParams(0, dp(58), 1.35f).apply { marginStart = dp(8) })
-        root.addView(controls, LinearLayout.LayoutParams(-1, dp(70)).apply { topMargin = dp(14) })
+        bottomPanel.addView(hint, LinearLayout.LayoutParams(-1, dp(24)).apply {
+            topMargin = dp(6)
+        })
 
+        root.addView(bottomPanel, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         setContentView(root)
+        updateModeUi()
     }
 
-    private fun actionButton(label: String, primary: Boolean, action: () -> Unit): Button {
-        return Button(this).apply {
+    private fun modeChip(label: String, selected: Boolean, action: () -> Unit): TextView {
+        return TextView(this).apply {
             text = label
-            isAllCaps = false
-            textSize = 13f
+            gravity = Gravity.CENTER
+            textSize = 12f
+            letterSpacing = 0.08f
             setTypeface(null, android.graphics.Typeface.BOLD)
-            setTextColor(if (primary) Color.rgb(10, 18, 22) else Color.WHITE)
-            background = rounded(
-                if (primary) Color.rgb(115, 231, 190) else Color.rgb(35, 43, 56),
-                16
-            )
-            stateListAnimator = null
             setOnClickListener { action() }
+            tag = selected
+        }
+    }
+
+    private fun updateModeUi() {
+        if (!::aiModeButton.isInitialized || !::vividModeButton.isInitialized) return
+        val aiSelected = mode == ColorEnhancer.Mode.AI
+        aiModeButton.apply {
+            setTextColor(if (aiSelected) Color.BLACK else Color.WHITE)
+            background = rounded(if (aiSelected) Color.WHITE else 0x55333333, 24)
+        }
+        vividModeButton.apply {
+            setTextColor(if (!aiSelected) Color.BLACK else Color.WHITE)
+            background = rounded(if (!aiSelected) Color.WHITE else 0x55333333, 24)
         }
     }
 
