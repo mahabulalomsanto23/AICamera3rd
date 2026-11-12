@@ -13,7 +13,7 @@ object ColorEnhancer {
     enum class Mode { AI, VIVID }
 
     fun enhance(source: Bitmap, mode: Mode): Bitmap {
-        val input = source.copy(Bitmap.Config.ARGB_8888, false)
+        val input = if (source.config == Bitmap.Config.ARGB_8888) source else source.copy(Bitmap.Config.ARGB_8888, false)
         val w = input.width
         val h = input.height
         val pixels = IntArray(w * h)
