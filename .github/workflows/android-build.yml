@@ -31,6 +31,15 @@ jobs:
           gradle-version: '8.9'
       - name: Build debug APK with bundled neural model
         run: gradle assembleDebug
+      - name: Verify APK signature and archive integrity
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          zip -T "$APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          sha256sum "$APK"
+          stat -c 'APK size: %s bytes' "$APK"
       - name: Name APK with Bangladesh time
         id: apk
         run: |
@@ -38,14 +47,17 @@ jobs:
           NAME="AI-Camera-Pro-OnePlus8-${STAMP}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          sha256sum "$NAME" > "$NAME.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apk.outputs.name }}
-          path: ${{ steps.apk.outputs.name }}
+          path: |
+            ${{ steps.apk.outputs.name }}
+            ${{ steps.apk.outputs.name }}.sha256
       - name: Publish latest APK release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APK_NAME: ${{ steps.apk.outputs.name }}
         run: |
           gh release delete latest --yes || true
-          gh release create latest "$APK_NAME" --title "AI Camera Pro latest" --notes "Bundled offline NAFNet-SIDD denoiser, Google MAXIM FiveK enhancer and ADE20K scene segmentation models. Filename uses Bangladesh time."
+          gh release create latest "$APK_NAME" "$APK_NAME.sha256" --title "AI Camera Pro latest" --notes "Build is checked with zip integrity and apksigner verification before publishing. SHA-256 checksum file is included. Bundled offline neural models."
