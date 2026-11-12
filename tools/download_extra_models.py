@@ -61,7 +61,7 @@ def smoke(path: Path, expected_input=None, min_classes=None):
     shape = ins[0]["shape"]
     if expected_input and list(shape) != expected_input:
         raise RuntimeError(f"{path.name}: expected input {expected_input}, got {shape}")
-    if min_classes and (len(outs[0]["shape"]) != 4 or (int(outs[0]["shape"][-1]) != 1 and int(outs[0]["shape"][-1]) < min_classes)):
+    if min_classes and not (len(outs[0]["shape"]) == 3 or (len(outs[0]["shape"]) == 4 and (int(outs[0]["shape"][-1]) == 1 or int(outs[0]["shape"][-1]) >= min_classes))):
         raise RuntimeError(f"{path.name}: expected ADE20K label map or class scores, got {outs[0]['shape']}")
     sample = np.zeros(shape, dtype=ins[0]["dtype"])
     interpreter.set_tensor(ins[0]["index"], sample)
