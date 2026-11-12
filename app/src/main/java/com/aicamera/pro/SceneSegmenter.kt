@@ -166,6 +166,16 @@ class SceneSegmenter(context: Context) : AutoCloseable {
                 labels[p] = bestClass
             }
         }
+        // ADE20K contiguous train-id 12 is person. Refuse unsafe masks rather than
+        // turning the entire frame into a blurred background when detection fails.
+        val personCount = labels.count { it == 12 }
+        val personRatio = personCount.toFloat() / labels.size
+        if (personRatio < 0.005f) {
+            throw IllegalStateException("Portrait subject not detected. Try a clearer, full-body photo with the person visible.")
+        }
+        if (personRatio > 0.95f) {
+            throw IllegalStateException("Portrait subject mask is unreliable for this photo. Please try another image.")
+        }
         val maskPixels = IntArray(labels.size) { i -> if (labels[i] == 12) Color.WHITE else Color.BLACK }
         val lowMask = Bitmap.createBitmap(maskPixels, outputW, outputH, Bitmap.Config.ARGB_8888)
         return Bitmap.createScaledBitmap(lowMask, source.width, source.height, true)

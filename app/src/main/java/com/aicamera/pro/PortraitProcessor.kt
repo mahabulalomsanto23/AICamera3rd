@@ -32,6 +32,11 @@ object PortraitProcessor {
         source.getPixels(fgPixels, 0, w, 0, 0, w, h)
         blurred.getPixels(bgFull, 0, w, 0, 0, w, h)
         personMask.getPixels(maskPixels, 0, w, 0, 0, w, h)
+        val personPixels = maskPixels.count { (it and 255) > 127 }
+        val personRatio = personPixels.toFloat() / maskPixels.size
+        require(personRatio >= 0.005f && personRatio <= 0.95f) {
+            "Portrait subject mask is unreliable. The photo was not blurred."
+        }
         val result = IntArray(w * h)
         for (i in result.indices) {
             val raw = (maskPixels[i] and 255) / 255f

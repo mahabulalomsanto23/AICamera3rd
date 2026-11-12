@@ -540,20 +540,18 @@ class MainActivity : AppCompatActivity() {
     /** Gallery imports require explicit Save; Cancel discards the enhanced result. */
     private fun processGalleryForPreview(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode) {
         var enhanced: Bitmap? = null
-        var handedOff = false
         try {
             runOnUiThread { setStatus("Processing gallery photo • ${selectedMode.name}…") }
             enhanced = enhance(bitmap, selectedMode)
             if (enhanced !== bitmap && !bitmap.isRecycled) bitmap.recycle()
-            val result = enhanced ?: throw IllegalStateException("Enhancement returned no image")
+            val result = enhanced
             enhanced = null
-            handedOff = true
             runOnUiThread { showGalleryResult(result, selectedMode) }
         } catch (e: Exception) {
             showFailure("Photo processing failed: ${e.message ?: e.javaClass.simpleName}")
         } finally {
             if (enhanced != null && enhanced !== bitmap && !enhanced.isRecycled) enhanced.recycle()
-            if (!handedOff && !bitmap.isRecycled) bitmap.recycle()
+            if (!bitmap.isRecycled) bitmap.recycle()
         }
     }
 
