@@ -2,6 +2,7 @@ package com.aicamera.pro
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import java.io.File
@@ -113,6 +114,61 @@ class SceneSegmenter(context: Context) : AutoCloseable {
                 (gg.toInt().coerceIn(0,255) shl 8) or bb.toInt().coerceIn(0,255)
         }
         return Bitmap.createBitmap(dst, w, h, Bitmap.Config.ARGB_8888)
+    }
+
+
+    /** ADE20K semantic class 12 is the person category. */
+    fun personMask(source: Bitmap): Bitmap {
+        val small = Bitmap.createScaledBitmap(source, inputW, inputH, true)
+        val rgb = IntArray(inputW * inputH)
+        small.getPixels(rgb, 0, inputW, 0, 0, inputW, inputH)
+        val tensor = interpreter.getInputTensor(0)
+        val input = ByteBuffer.allocateDirect(tensor.numBytes()).order(ByteOrder.nativeOrder())
+        when (tensor.dataType()) {
+            DataType.FLOAT32 -> for (p in rgb) {
+                input.putFloat(((p shr 16 and 255) / 127.5f) - 1f)
+                input.putFloat(((p shr 8 and 255) / 127.5f) - 1f)
+                input.putFloat(((p and 255) / 127.5f) - 1f)
+            }
+            DataType.UINT8 -> for (p in rgb) {
+                input.put(((p shr 16) and 255).toByte())
+                input.put(((p shr 8) and 255).toByte())
+                input.put((p and 255).toByte())
+            }
+            else -> throw IllegalStateException("Unsupported portrait model input")
+        }
+        input.rewind()
+        val outTensor = interpreter.getOutputTensor(0)
+        val output = ByteBuffer.allocateDirect(outTensor.numBytes()).order(ByteOrder.nativeOrder())
+        interpreter.run(input, output)
+        output.rewind()
+        val labels = IntArray(outputW * outputH)
+        if (outTensor.shape().size == 3 || outTensor.shape()[3] == 1) {
+            for (p in labels.indices) {
+                labels[p] = when (outTensor.dataType()) {
+                    DataType.INT64 -> output.getLong().toInt()
+                    DataType.INT32 -> output.getInt()
+                    DataType.FLOAT32 -> output.getFloat().toInt()
+                    DataType.UINT8 -> output.get().toInt() and 0xff
+                    DataType.INT8 -> output.get().toInt()
+                    else -> throw IllegalStateException("Unsupported portrait mask output")
+                }
+            }
+        } else {
+            if (outTensor.dataType() != DataType.FLOAT32) throw IllegalStateException("Unsupported portrait logits output")
+            for (p in labels.indices) {
+                var best = -Float.MAX_VALUE
+                var bestClass = 0
+                for (c in 0 until classes) {
+                    val score = output.getFloat((p * classes + c) * 4)
+                    if (score > best) { best = score; bestClass = c }
+                }
+                labels[p] = bestClass
+            }
+        }
+        val maskPixels = IntArray(labels.size) { i -> if (labels[i] == 12) Color.WHITE else Color.BLACK }
+        val lowMask = Bitmap.createBitmap(maskPixels, outputW, outputH, Bitmap.Config.ARGB_8888)
+        return Bitmap.createScaledBitmap(lowMask, source.width, source.height, true)
     }
 
     override fun close() = interpreter.close()

@@ -10,7 +10,7 @@ import kotlin.math.pow
  * AI mode favors natural daylight color; VIVID mode applies a stronger creative look.
  */
 object ColorEnhancer {
-    enum class Mode { AI, VIVID }
+    enum class Mode { AI, VIVID, PORTRAIT }
 
     fun enhance(source: Bitmap, mode: Mode): Bitmap {
         val input = if (source.config == Bitmap.Config.ARGB_8888) source else source.copy(Bitmap.Config.ARGB_8888, false)
