@@ -17,6 +17,7 @@ import java.nio.ByteOrder
  */
 class MaximEnhancer(context: Context) : AutoCloseable {
     private val interpreter: Interpreter
+    private var outputIndex: Int = 0
 
     init {
         val modelFile = File(context.filesDir, "maxim_fivek_fp16.tflite")
@@ -28,13 +29,17 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         val options = Interpreter.Options().apply { setNumThreads(4) }
         interpreter = Interpreter(modelFile, options)
         val inputShape = interpreter.getInputTensor(0).shape()
-        val outputShape = interpreter.getOutputTensor(0).shape()
         require(inputShape.contentEquals(intArrayOf(1, 256, 256, 3))) {
             "Unexpected MAXIM input shape: ${inputShape.contentToString()}"
         }
-        require(outputShape.contentEquals(intArrayOf(1, 256, 256, 3))) {
-            "Unexpected MAXIM output shape: ${outputShape.contentToString()}"
+        val fullOutputIndex = (0 until interpreter.outputTensorCount).firstOrNull { index ->
+            interpreter.getOutputTensor(index).shape().contentEquals(intArrayOf(1, 256, 256, 3))
         }
+        require(fullOutputIndex != null) {
+            "MAXIM has no full-resolution output. Outputs: " +
+                (0 until interpreter.outputTensorCount).joinToString { interpreter.getOutputTensor(it).shape().contentToString() }
+        }
+        outputIndex = fullOutputIndex
     }
 
     fun enhance(source: Bitmap): Bitmap {
@@ -44,7 +49,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         small.getPixels(sourcePixels, 0, 256, 0, 0, 256, 256)
 
         val inputTensor = interpreter.getInputTensor(0)
-        val outputTensor = interpreter.getOutputTensor(0)
+        val outputTensor = interpreter.getOutputTensor(outputIndex)
         val input = ByteBuffer.allocateDirect(inputTensor.numBytes()).order(ByteOrder.nativeOrder())
         when (inputTensor.dataType()) {
             DataType.UINT8 -> sourcePixels.forEach { c ->
@@ -62,7 +67,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         input.rewind()
 
         val output = ByteBuffer.allocateDirect(outputTensor.numBytes()).order(ByteOrder.nativeOrder())
-        interpreter.run(input, output)
+        interpreter.runForMultipleInputsOutputs(arrayOf(input), mapOf(outputIndex to output))
         output.rewind()
 
         val enhancedSmall = IntArray(256 * 256)
