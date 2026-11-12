@@ -79,8 +79,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val previousCrash = CrashReporter.install(this)
         super.onCreate(savedInstanceState)
+        // Show a previously saved crash report before camera/model startup can fail again.
+        CrashReporter.offerPending(this)
         cameraExecutor = Executors.newSingleThreadExecutor()
         processingExecutor = Executors.newSingleThreadExecutor()
         modelExecutor = Executors.newSingleThreadExecutor()
