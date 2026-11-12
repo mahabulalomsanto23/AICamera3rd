@@ -34,8 +34,8 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         val ins = interpreter.getInputTensor(0).shape()
         val outs = interpreter.getOutputTensor(0).shape()
         require(ins.size == 4 && ins[0] == 1 && ins[3] == 3) { "Unsupported segmentation input: ${ins.contentToString()}" }
-        require(outs.size == 4 && outs[0] == 1 && outs[3] >= 100) { "Unsupported ADE20K output: ${outs.contentToString()}" }
-        inputH = ins[1]; inputW = ins[2]; outputH = outs[1]; outputW = outs[2]; classes = outs[3]
+        require(outs.size == 4 && outs[0] == 1 && (outs[3] == 1 || outs[3] >= 100)) { "Unsupported ADE20K output: ${outs.contentToString()}" }
+        inputH = ins[1]; inputW = ins[2]; outputH = outs[1]; outputW = outs[2]; classes = if (outs[3] == 1) 150 else outs[3]
         require(classes > 92) { "ADE20K model has no apparel class" }
     }
 
@@ -64,15 +64,28 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         interpreter.run(input, output)
         output.rewind()
         val labels = IntArray(outputW * outputH)
-        if (outTensor.dataType() != DataType.FLOAT32) return enhanced
-        for (p in labels.indices) {
-            var best = -Float.MAX_VALUE
-            var bestClass = 0
-            for (c in 0 until classes) {
-                val score = output.getFloat((p * classes + c) * 4)
-                if (score > best) { best = score; bestClass = c }
+        if (outTensor.shape()[3] == 1) {
+            for (p in labels.indices) {
+                labels[p] = when (outTensor.dataType()) {
+                    DataType.INT64 -> output.getLong().toInt()
+                    DataType.INT32 -> output.getInt()
+                    DataType.FLOAT32 -> output.getFloat().toInt()
+                    DataType.UINT8 -> output.get().toInt() and 0xff
+                    DataType.INT8 -> output.get().toInt()
+                    else -> return enhanced
+                }
             }
-            labels[p] = bestClass
+        } else {
+            if (outTensor.dataType() != DataType.FLOAT32) return enhanced
+            for (p in labels.indices) {
+                var best = -Float.MAX_VALUE
+                var bestClass = 0
+                for (c in 0 until classes) {
+                    val score = output.getFloat((p * classes + c) * 4)
+                    if (score > best) { best = score; bestClass = c }
+                }
+                labels[p] = bestClass
+            }
         }
 
         val w = enhanced.width; val h = enhanced.height
