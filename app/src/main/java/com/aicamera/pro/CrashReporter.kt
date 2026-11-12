@@ -11,47 +11,50 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Stores fatal app crashes locally so the user can share the report without a computer,
- * ADB, or developer tools. The report is offered on the next successful app launch.
- */
+/** Captures uncaught Java/Kotlin exceptions from the entire app process. */
 object CrashReporter {
     private const val FILE_NAME = "last-crash-report.txt"
+    @Volatile private var pendingReport: String? = null
 
-    fun install(context: Context): String? {
-        val file = File(context.filesDir, FILE_NAME)
-        val previous = try {
+    fun install(context: Context) {
+        val appContext = context.applicationContext
+        val file = File(appContext.filesDir, FILE_NAME)
+        pendingReport = try {
             if (file.exists()) file.readText().takeIf { it.isNotBlank() } else null
         } catch (_: Exception) { null }
 
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                val writer = StringWriter()
-                throwable.printStackTrace(PrintWriter(writer))
+                val trace = StringWriter()
+                throwable.printStackTrace(PrintWriter(trace))
                 val report = buildString {
                     appendLine("AI Camera Pro crash report")
                     appendLine("Time: " + SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date()))
-                    val appInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-                    appendLine("App: " + appInfo.versionName + " (" + appInfo.versionCode + ")")
                     appendLine("Device: " + Build.MANUFACTURER + " " + Build.MODEL)
                     appendLine("Android: " + Build.VERSION.RELEASE + " (SDK " + Build.VERSION.SDK_INT + ")")
                     appendLine("Thread: " + thread.name)
                     appendLine()
-                    append(writer.toString())
+                    append(trace.toString())
                 }
-                file.writeText(report)
-            } catch (_: Exception) { }
-            if (defaultHandler != null) defaultHandler.uncaughtException(thread, throwable)
+                val temp = File(appContext.filesDir, "$FILE_NAME.tmp")
+                temp.writeText(report)
+                val target = file
+                if (target.exists()) target.delete()
+                if (!temp.renameTo(target)) target.writeText(report)
+            } catch (_: Throwable) { /* Never block Android's crash handler. */ }
+
+            if (previousHandler != null) previousHandler.uncaughtException(thread, throwable)
             else android.os.Process.killProcess(android.os.Process.myPid())
         }
-        return previous
     }
 
-    fun offerShare(context: Context, report: String) {
+    fun offerPending(context: Context) {
+        val report = pendingReport ?: return
+        pendingReport = null
         AlertDialog.Builder(context)
             .setTitle("আগেরবার অ্যাপ বন্ধ হয়ে গিয়েছিল")
-            .setMessage("Crash report পাওয়া গেছে। এটি Share করলে আমি সমস্যাটি শনাক্ত করে ঠিক করতে পারব।")
+            .setMessage("Crash report পাওয়া গেছে। SHARE LOG চাপলে রিপোর্টটি পাঠাতে পারবেন।")
             .setPositiveButton("SHARE LOG") { _, _ ->
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
