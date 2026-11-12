@@ -34,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private var capture: ImageCapture? = null
     private var mode = ColorEnhancer.Mode.AI
     @Volatile private var maximEnhancer: MaximEnhancer? = null
+    @Volatile private var faceProtector: FaceProtector? = null
     @Volatile private var modelError: String? = null
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -61,7 +62,8 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor.execute {
             try {
                 maximEnhancer = MaximEnhancer(this)
-                runOnUiThread { status.text = "AI MODE • MAXIM FIVEK NEURAL • OFFLINE" }
+                faceProtector = FaceProtector()
+                runOnUiThread { status.text = "AI MODE • MAXIM + FACE AI • OFFLINE" }
             } catch (e: Exception) {
                 modelError = e.localizedMessage ?: "Model initialization failed"
                 runOnUiThread { status.text = "AI MODEL ERROR • ${modelError}" }
@@ -72,8 +74,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enhance(bitmap: Bitmap): Bitmap = when (mode) {
-        ColorEnhancer.Mode.AI -> maximEnhancer?.enhance(bitmap)
-            ?: throw IllegalStateException(modelError ?: "Neural model is still loading")
+        ColorEnhancer.Mode.AI -> {
+            val enhanced = maximEnhancer?.enhance(bitmap)
+                ?: throw IllegalStateException(modelError ?: "Neural model is still loading")
+            faceProtector?.protect(bitmap, enhanced) ?: enhanced
+        }
         ColorEnhancer.Mode.VIVID -> ColorEnhancer.enhance(bitmap, ColorEnhancer.Mode.VIVID)
     }
 
@@ -145,6 +150,7 @@ class MainActivity : AppCompatActivity() {
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     override fun onDestroy() {
         maximEnhancer?.close()
+        faceProtector?.close()
         super.onDestroy()
         cameraExecutor.shutdown()
     }
