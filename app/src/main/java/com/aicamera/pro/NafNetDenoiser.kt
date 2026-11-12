@@ -40,12 +40,16 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
         val weight = FloatArray(pixels.size)
         val tile = 256
         val stride = 224
+        val input = ByteBuffer.allocateDirect(3 * tile * tile * 4).order(ByteOrder.nativeOrder())
+        val output = ByteBuffer.allocateDirect(3 * tile * tile * 4).order(ByteOrder.nativeOrder())
+        val patch = IntArray(tile * tile)
+        val planes = Array(3) { FloatArray(tile * tile) }
         var top = 0
         while (top < h) {
             var left = 0
             while (left < w) {
-                val input = ByteBuffer.allocateDirect(3 * tile * tile * 4).order(ByteOrder.nativeOrder())
-                val patch = IntArray(tile * tile)
+                input.clear()
+                output.clear()
                 for (y in 0 until tile) for (x in 0 until tile) {
                     val sx = (left + x - 16).coerceIn(0, w - 1)
                     val sy = (top + y - 16).coerceIn(0, h - 1)
@@ -57,10 +61,8 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
                     input.putFloat(v / 255f)
                 }
                 input.rewind()
-                val output = ByteBuffer.allocateDirect(3 * tile * tile * 4).order(ByteOrder.nativeOrder())
                 interpreter.run(input, output)
                 output.rewind()
-                val planes = Array(3) { FloatArray(tile * tile) }
                 for (channel in 0..2) for (i in 0 until tile * tile) planes[channel][i] = output.float.coerceIn(0f, 1f)
                 val endY = min(h, top + stride)
                 val endX = min(w, left + stride)
