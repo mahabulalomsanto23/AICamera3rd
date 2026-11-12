@@ -13,6 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Download and convert MAXIM FiveK neural model
+        run: |
+          python -m pip install --upgrade pip
+          pip install tensorflow-cpu==2.15.1 huggingface_hub==0.26.5
+          python tools/convert_maxim_fivek.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -20,7 +28,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build debug APK
+      - name: Build debug APK with bundled neural model
         run: gradle assembleDebug
       - name: Name APK with Bangladesh time
         id: apk
@@ -34,10 +42,9 @@ jobs:
           name: ${{ steps.apk.outputs.name }}
           path: ${{ steps.apk.outputs.name }}
       - name: Publish latest APK release
-        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APK_NAME: ${{ steps.apk.outputs.name }}
         run: |
           gh release delete latest --yes || true
-          gh release create latest "$APK_NAME" --title "AI Camera Pro latest" --notes "Automated OnePlus 8 debug APK. Filename uses Bangladesh time."
+          gh release create latest "$APK_NAME" --title "AI Camera Pro latest" --notes "Bundled offline MAXIM FiveK neural enhancement model. Filename uses Bangladesh time."
