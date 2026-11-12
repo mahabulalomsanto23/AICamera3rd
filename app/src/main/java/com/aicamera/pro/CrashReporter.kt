@@ -32,7 +32,8 @@ object CrashReporter {
                 val report = buildString {
                     appendLine("AI Camera Pro crash report")
                     appendLine("Time: " + SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date()))
-                    appendLine("App: " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")")
+                    val appInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                    appendLine("App: " + appInfo.versionName + " (" + appInfo.versionCode + ")")
                     appendLine("Device: " + Build.MANUFACTURER + " " + Build.MODEL)
                     appendLine("Android: " + Build.VERSION.RELEASE + " (SDK " + Build.VERSION.SDK_INT + ")")
                     appendLine("Thread: " + thread.name)
