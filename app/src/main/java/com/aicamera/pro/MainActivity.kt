@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modelExecutor: ExecutorService
 
     private var capture: ImageCapture? = null
+    @Volatile private var lensFacing = androidx.camera.core.CameraSelector.LENS_FACING_BACK
     @Volatile private var mode = ColorEnhancer.Mode.AI
     @Volatile private var maximEnhancer: MaximEnhancer? = null
     @Volatile private var faceProtector: FaceProtector? = null
@@ -195,7 +196,24 @@ class MainActivity : AppCompatActivity() {
             background = rounded(0x66000000, 24)
             maxLines = 1
         }
-        topBar.addView(status, LinearLayout.LayoutParams(-2, dp(32)))
+        topBar.addView(status, LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            marginStart = dp(8)
+        })
+        val switchCameraButton = TextView(this).apply {
+            text = "↻"
+            textSize = 27f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            contentDescription = "Switch front and back camera"
+            background = rounded(0x66000000, 50)
+            setOnClickListener {
+                if (!busy) switchCamera()
+            }
+        }
+        topBar.addView(switchCameraButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+            marginStart = dp(10)
+        })
         root.addView(topBar, android.widget.FrameLayout.LayoutParams(-1, dp(76), Gravity.TOP))
 
         // Camera controls sit over a subtle bottom scrim; the viewfinder stays dominant.
@@ -361,9 +379,11 @@ class MainActivity : AppCompatActivity() {
         future.addListener({
             try {
                 val provider = future.get()
-                val cameraPreview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(preview.surfaceProvider)
-                }
+                val cameraPreview = Preview.Builder()
+                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+                    .build().also {
+                        it.setSurfaceProvider(preview.surfaceProvider)
+                    }
                 capture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                     .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
@@ -371,7 +391,9 @@ class MainActivity : AppCompatActivity() {
                 provider.unbindAll()
                 provider.bindToLifecycle(
                     this,
-                    androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA,
+                    androidx.camera.core.CameraSelector.Builder()
+                        .requireLensFacing(lensFacing)
+                        .build(),
                     cameraPreview,
                     capture
                 )
@@ -381,6 +403,21 @@ class MainActivity : AppCompatActivity() {
                 toast("Camera start failed")
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+
+    private fun switchCamera() {
+        lensFacing = if (lensFacing == androidx.camera.core.CameraSelector.LENS_FACING_BACK) {
+            androidx.camera.core.CameraSelector.LENS_FACING_FRONT
+        } else {
+            androidx.camera.core.CameraSelector.LENS_FACING_BACK
+        }
+        setStatus(if (lensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) {
+            "FRONT CAMERA • 4:3 PREVIEW"
+        } else {
+            "BACK CAMERA • 4:3 PREVIEW"
+        })
+        startCamera()
     }
 
     private fun takePhoto() {
