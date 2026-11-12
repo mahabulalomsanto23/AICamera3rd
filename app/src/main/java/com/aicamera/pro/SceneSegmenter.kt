@@ -48,9 +48,10 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         val tensor = interpreter.getInputTensor(0)
         val input = ByteBuffer.allocateDirect(tensor.numBytes()).order(ByteOrder.nativeOrder())
         when (tensor.dataType()) {
-            DataType.FLOAT32 -> for (c in 0..2) for (p in rgb) {
-                val v = when(c) { 0 -> p shr 16 and 255; 1 -> p shr 8 and 255; else -> p and 255 }
-                input.putFloat(v / 127.5f - 1f)
+            DataType.FLOAT32 -> for (p in rgb) {
+                input.putFloat(((p shr 16 and 255) / 127.5f) - 1f)
+                input.putFloat(((p shr 8 and 255) / 127.5f) - 1f)
+                input.putFloat(((p and 255) / 127.5f) - 1f)
             }
             DataType.UINT8 -> for (p in rgb) {
                 input.put(((p shr 16) and 255).toByte()); input.put(((p shr 8) and 255).toByte()); input.put((p and 255).toByte())
