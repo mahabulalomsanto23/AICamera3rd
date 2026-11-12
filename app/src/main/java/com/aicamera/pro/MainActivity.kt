@@ -64,8 +64,7 @@ class MainActivity : AppCompatActivity() {
         setBusy(true, "Opening selected photo…")
         processingExecutor.execute {
             try {
-                val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-                    ?: throw IOException("Could not read selected photo")
+                val bitmap = decodeGalleryImage(uri)
                 processAndPreview(bitmap, selectedMode)
             } catch (e: Exception) {
                 showFailure("Photo processing failed: ${e.message ?: e.javaClass.simpleName}")
@@ -355,8 +354,7 @@ class MainActivity : AppCompatActivity() {
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
                 processingExecutor.execute {
                     try {
-                        val bitmap = BitmapFactory.decodeFile(output.absolutePath)
-                            ?: throw IOException("Captured image could not be decoded")
+                        val bitmap = decodeCapturedImage(output)
                         processAndPreview(bitmap, selectedMode)
                     } catch (e: Exception) {
                         showFailure("Enhancement failed: ${e.message ?: e.javaClass.simpleName}")
@@ -366,6 +364,58 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+
+    /**
+     * Decode large phone photos safely. ImageDecoder supports modern formats (including HEIC)
+     * on Android 9+, and all processing is capped at 2560px on the long edge to avoid
+     * multi-hundred-megabyte bitmap allocations on mobile devices.
+     */
+    private fun decodeGalleryImage(uri: android.net.Uri): Bitmap {
+        val maxEdge = 2560
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val source = android.graphics.ImageDecoder.createSource(contentResolver, uri)
+            return android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                val width = info.size.width
+                val height = info.size.height
+                val scale = minOf(1.0, maxEdge.toDouble() / maxOf(width, height))
+                decoder.setTargetSize(
+                    (width * scale).toInt().coerceAtLeast(1),
+                    (height * scale).toInt().coerceAtLeast(1)
+                )
+                decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        }
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            ?: throw IOException("Could not open selected photo")
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException("Unsupported or damaged image")
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, maxEdge)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+            ?: throw IOException("Could not decode selected photo")
+    }
+
+    private fun decodeCapturedImage(file: File): Bitmap {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException("Captured image is invalid")
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, 2560)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return BitmapFactory.decodeFile(file.absolutePath, options)
+            ?: throw IOException("Captured image could not be decoded")
+    }
+
+    private fun calculateSampleSize(width: Int, height: Int, maxEdge: Int): Int {
+        var sample = 1
+        while (maxOf(width / sample, height / sample) > maxEdge) sample *= 2
+        return sample
     }
 
     private fun processAndPreview(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode) {
