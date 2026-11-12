@@ -1,0 +1,51 @@
+name: Android Build
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: aicamera3rd-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Download and convert MAXIM FiveK neural model
+        run: |
+          python -m pip install --upgrade pip
+          pip install tensorflow-cpu==2.15.1 huggingface_hub==0.26.5
+          python tools/convert_maxim_fivek.py
+          python tools/download_extra_models.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build debug APK with bundled neural model
+        run: gradle assembleDebug
+      - name: Name APK with Bangladesh time
+        id: apk
+        run: |
+          STAMP=$(TZ=Asia/Dhaka date +'%Y%m%d-%H%M%S-BD')
+          NAME="AI-Camera-Pro-OnePlus8-${STAMP}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.name }}
+      - name: Publish latest APK release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APK_NAME: ${{ steps.apk.outputs.name }}
+        run: |
+          gh release delete latest --yes || true
+          gh release create latest "$APK_NAME" --title "AI Camera Pro latest" --notes "Bundled offline NAFNet-SIDD denoiser, Google MAXIM FiveK enhancer and ADE20K scene segmentation models. Filename uses Bangladesh time."
