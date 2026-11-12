@@ -78,7 +78,7 @@ smoke(naf, [1, 3, 256, 256])
 
 seg_archive = ASSETS / "ade20k_tfhub_download"
 seg_model = ASSETS / "deeplabv3_ade20k.tflite"
-fetch("https://tfhub.dev/sayakpaul/deeplabv3-mobilenetv2-ade20k/1/default/lite/2?tf-hub-format=compressed", seg_archive)
+fetch("https://tfhub.dev/sayakpaul/deeplabv3-mobilenetv2-ade20k/1/default/2?lite-format=tflite", seg_archive)
 extract_tflite(seg_archive, seg_model)
 seg_archive.unlink(missing_ok=True)
 smoke(seg_model, min_classes=100)
