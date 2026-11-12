@@ -79,11 +79,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val previousCrash = CrashReporter.install(this)
         super.onCreate(savedInstanceState)
         cameraExecutor = Executors.newSingleThreadExecutor()
         processingExecutor = Executors.newSingleThreadExecutor()
         modelExecutor = Executors.newSingleThreadExecutor()
         buildUi()
+        previousCrash?.let { CrashReporter.offerShare(this, it) }
         loadModels()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
