@@ -155,13 +155,16 @@ class MainActivity : AppCompatActivity() {
             try {
                 runOnUiThread { setStatus("AI • SCENE & FACE REFINEMENT…") }
                 val sceneAware = sceneSegmenter?.let { it.apply(denoised, maxim) } ?: maxim
-                try {
-                    return faceProtector?.let { it.protect(bitmap, sceneAware) } ?: sceneAware
+                val finalBitmap = try {
+                    faceProtector?.let { it.protect(bitmap, sceneAware) } ?: sceneAware
                 } finally {
                     if (sceneAware !== maxim && !sceneAware.isRecycled) sceneAware.recycle()
                 }
-            } finally {
+                if (finalBitmap !== maxim && !maxim.isRecycled) maxim.recycle()
+                return finalBitmap
+            } catch (e: Exception) {
                 if (!maxim.isRecycled) maxim.recycle()
+                throw e
             }
         } finally {
             if (!denoised.isRecycled) denoised.recycle()
