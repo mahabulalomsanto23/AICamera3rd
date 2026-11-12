@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var faceProtector: FaceProtector? = null
     @Volatile private var denoiser: NafNetDenoiser? = null
     @Volatile private var sceneSegmenter: SceneSegmenter? = null
+    @Volatile private var selfieSegmenter: SelfiePersonSegmenter? = null
     @Volatile private var maximError: String? = null
     @Volatile private var denoiserError: String? = null
     private var busy = false
@@ -112,6 +113,12 @@ class MainActivity : AppCompatActivity() {
                 sceneSegmenter = null
             }
             try {
+                selfieSegmenter = SelfiePersonSegmenter()
+            } catch (e: Exception) {
+                selfieSegmenter = null
+                maximError = "Portrait segmentation unavailable"
+            }
+            try {
                 faceProtector = FaceProtector()
             } catch (_: Exception) {
                 faceProtector = null
@@ -135,8 +142,8 @@ class MainActivity : AppCompatActivity() {
             return ColorEnhancer.enhance(bitmap, ColorEnhancer.Mode.VIVID)
         }
         if (selectedMode == ColorEnhancer.Mode.PORTRAIT) {
-            val segmenter = sceneSegmenter
-                ?: throw IllegalStateException("Portrait model is still loading or unavailable. Please wait.")
+            val segmenter = selfieSegmenter
+                ?: throw IllegalStateException("Portrait subject detector is unavailable. Please restart the app.")
             val personMask = segmenter.personMask(bitmap)
             return PortraitProcessor.apply(bitmap, personMask, portraitStrength)
         }
@@ -707,6 +714,7 @@ class MainActivity : AppCompatActivity() {
         maximEnhancer?.close()
         denoiser?.close()
         sceneSegmenter?.close()
+        selfieSegmenter?.close()
         faceProtector?.close()
         super.onDestroy()
     }
