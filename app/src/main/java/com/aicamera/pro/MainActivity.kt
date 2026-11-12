@@ -5,14 +5,21 @@ import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -21,6 +28,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -31,27 +39,34 @@ class MainActivity : AppCompatActivity() {
     private lateinit var preview: PreviewView
     private lateinit var status: TextView
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var processingExecutor: ExecutorService
+    private lateinit var modelExecutor: ExecutorService
+
     private var capture: ImageCapture? = null
-    private var mode = ColorEnhancer.Mode.AI
+    @Volatile private var mode = ColorEnhancer.Mode.AI
     @Volatile private var maximEnhancer: MaximEnhancer? = null
     @Volatile private var faceProtector: FaceProtector? = null
     @Volatile private var denoiser: NafNetDenoiser? = null
     @Volatile private var sceneSegmenter: SceneSegmenter? = null
-    @Volatile private var modelError: String? = null
+    @Volatile private var maximError: String? = null
+    @Volatile private var denoiserError: String? = null
+    private var busy = false
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) startCamera() else toast("Camera permission required")
     }
+
     private val picker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri ?: return@registerForActivityResult
-        cameraExecutor.execute {
+        if (uri == null) return@registerForActivityResult
+        val selectedMode = mode
+        setBusy(true, "Opening selected photo…")
+        processingExecutor.execute {
             try {
                 val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-                    ?: throw IllegalStateException("Could not read selected photo")
-                val result = enhance(bitmap)
-                runOnUiThread { saveBitmap(result); status.text = "Enhanced photo saved"; toast("AI photo saved") }
+                    ?: throw IOException("Could not read selected photo")
+                processAndPreview(bitmap, selectedMode)
             } catch (e: Exception) {
-                runOnUiThread { toast("Enhancement failed: ${e.localizedMessage}") }
+                showFailure("Photo processing failed: ${e.message ?: e.javaClass.simpleName}")
             }
         }
     }
@@ -59,107 +74,355 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         cameraExecutor = Executors.newSingleThreadExecutor()
+        processingExecutor = Executors.newSingleThreadExecutor()
+        modelExecutor = Executors.newSingleThreadExecutor()
         buildUi()
-        status.text = "Loading MAXIM FiveK neural model…"
-        cameraExecutor.execute {
-            try {
-                maximEnhancer = MaximEnhancer(this)
-                denoiser = NafNetDenoiser(this)
-                sceneSegmenter = SceneSegmenter(this)
-                faceProtector = FaceProtector()
-                runOnUiThread { status.text = "AI MODE • NAFNET + MAXIM + SCENE AI • OFFLINE" }
-            } catch (e: Exception) {
-                modelError = e.localizedMessage ?: "Model initialization failed"
-                runOnUiThread { status.text = "AI MODEL ERROR • ${modelError}" }
-            }
+        loadModels()
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            startCamera()
+        } else {
+            permissions.launch(Manifest.permission.CAMERA)
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startCamera()
-        else permissions.launch(Manifest.permission.CAMERA)
     }
 
-    private fun enhance(bitmap: Bitmap): Bitmap = when (mode) {
-        ColorEnhancer.Mode.AI -> {
-            val denoised = denoiser?.denoise(bitmap) ?: throw IllegalStateException("NAFNet denoiser is still loading")
-            val maxim = maximEnhancer?.enhance(denoised)
-                ?: throw IllegalStateException(modelError ?: "MAXIM neural model is still loading")
-            val sceneAware = sceneSegmenter?.apply(denoised, maxim) ?: maxim
-            faceProtector?.protect(bitmap, sceneAware) ?: sceneAware
+    private fun loadModels() {
+        setStatus("Preparing offline AI models…")
+        modelExecutor.execute {
+            // Load each model independently: one optional model failure must not disable the others.
+            try {
+                maximEnhancer = MaximEnhancer(this)
+            } catch (e: Exception) {
+                maximError = e.message ?: "MAXIM initialization failed"
+            }
+            try {
+                denoiser = NafNetDenoiser(this)
+            } catch (e: Exception) {
+                denoiserError = e.message ?: "NAFNet initialization failed"
+            }
+            try {
+                sceneSegmenter = SceneSegmenter(this)
+            } catch (_: Exception) {
+                sceneSegmenter = null
+            }
+            try {
+                faceProtector = FaceProtector()
+            } catch (_: Exception) {
+                faceProtector = null
+            }
+
+            runOnUiThread {
+                val ready = maximEnhancer != null && denoiser != null
+                if (ready) {
+                    setStatus("AI READY • MAXIM + NAFNET • OFFLINE")
+                } else {
+                    val reason = listOfNotNull(denoiserError, maximError).joinToString(" • ")
+                    setStatus("AI MODEL INCOMPLETE • Vivid mode is available")
+                    if (reason.isNotBlank()) toast(reason)
+                }
+            }
         }
-        ColorEnhancer.Mode.VIVID -> ColorEnhancer.enhance(bitmap, ColorEnhancer.Mode.VIVID)
+    }
+
+    private fun enhance(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode): Bitmap {
+        if (selectedMode == ColorEnhancer.Mode.VIVID) {
+            return ColorEnhancer.enhance(bitmap, ColorEnhancer.Mode.VIVID)
+        }
+
+        val denoiserModel = denoiser
+            ?: throw IllegalStateException(denoiserError ?: "NAFNet is still loading. Please wait.")
+        val maximModel = maximEnhancer
+            ?: throw IllegalStateException(maximError ?: "MAXIM is still loading. Please wait.")
+
+        val denoised = denoiserModel.denoise(bitmap)
+        val maxim = maximModel.enhance(denoised)
+        val sceneAware = sceneSegmenter?.let { it.apply(denoised, maxim) } ?: maxim
+        return faceProtector?.let { it.protect(bitmap, sceneAware) } ?: sceneAware
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF000000.toInt()) }
-        preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.COMPATIBLE }
-        preview.post {
-            val width = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
-            preview.layoutParams = LinearLayout.LayoutParams(width, width * 3 / 4)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(18))
+            setBackgroundColor(Color.rgb(8, 10, 15))
         }
-        root.addView(preview, LinearLayout.LayoutParams(-1, -2))
-        status = TextView(this).apply { text = "Loading AI model…"; setTextColor(-1); gravity = Gravity.CENTER; textSize = 12f; setPadding(8,10,8,6) }
-        root.addView(status)
-        val modes = LinearLayout(this).apply { gravity = Gravity.CENTER; setPadding(8,4,8,8) }
-        modes.addView(button("AI MODE") { mode = ColorEnhancer.Mode.AI; status.text = "AI MODE • MAXIM FIVEK NEURAL" })
-        modes.addView(button("VIVID") { mode = ColorEnhancer.Mode.VIVID; status.text = "VIVID MODE • RICH COLOR" })
-        root.addView(modes)
-        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER; setPadding(8,4,8,22) }
-        controls.addView(button("GALLERY") { picker.launch("image/*") })
-        controls.addView(button("●") { takePhoto() })
-        root.addView(controls)
+
+        val heading = TextView(this).apply {
+            text = "AI CAMERA PRO"
+            setTextColor(Color.WHITE)
+            textSize = 22f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            gravity = Gravity.CENTER
+        }
+        root.addView(heading, LinearLayout.LayoutParams(-1, dp(34)))
+
+        val subtitle = TextView(this).apply {
+            text = "OFFLINE PHOTO ENHANCEMENT"
+            setTextColor(Color.rgb(150, 165, 185))
+            textSize = 10f
+            gravity = Gravity.CENTER
+            letterSpacing = 0.16f
+        }
+        root.addView(subtitle, LinearLayout.LayoutParams(-1, dp(24)))
+
+        preview = PreviewView(this).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            clipToOutline = true
+            background = rounded(Color.rgb(20, 25, 34), 22)
+        }
+        val previewHeight = (resources.displayMetrics.widthPixels * 1.12f).toInt()
+        root.addView(preview, LinearLayout.LayoutParams(-1, previewHeight).apply {
+            topMargin = dp(10)
+            bottomMargin = dp(12)
+        })
+
+        status = TextView(this).apply {
+            text = "Starting camera and loading AI…"
+            setTextColor(Color.rgb(120, 220, 180))
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = rounded(Color.rgb(20, 31, 35), 12)
+        }
+        root.addView(status, LinearLayout.LayoutParams(-1, dp(42)).apply {
+            bottomMargin = dp(14)
+        })
+
+        val modeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        modeRow.addView(actionButton("AI MODE", true) {
+            mode = ColorEnhancer.Mode.AI
+            setStatus(if (maximEnhancer != null && denoiser != null) "AI MODE SELECTED • NEURAL ENHANCEMENT" else "AI MODE SELECTED • WAITING FOR MODELS")
+        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(6) })
+        modeRow.addView(actionButton("VIVID", false) {
+            mode = ColorEnhancer.Mode.VIVID
+            setStatus("VIVID MODE • COLOR ENHANCEMENT")
+        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(6) })
+        root.addView(modeRow)
+
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        controls.addView(actionButton("GALLERY", false) {
+            if (!busy) picker.launch("image/*")
+        }, LinearLayout.LayoutParams(0, dp(58), 1f).apply { marginEnd = dp(8) })
+        controls.addView(actionButton("●  CAPTURE", true) {
+            takePhoto()
+        }, LinearLayout.LayoutParams(0, dp(58), 1.35f).apply { marginStart = dp(8) })
+        root.addView(controls, LinearLayout.LayoutParams(-1, dp(70)).apply { topMargin = dp(14) })
+
         setContentView(root)
     }
 
-    private fun button(label: String, action: () -> Unit) = Button(this).apply {
-        text = label; isAllCaps = false; textSize = 13f; setOnClickListener { action() }
+    private fun actionButton(label: String, primary: Boolean, action: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 13f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(if (primary) Color.rgb(10, 18, 22) else Color.WHITE)
+            background = rounded(
+                if (primary) Color.rgb(115, 231, 190) else Color.rgb(35, 43, 56),
+                16
+            )
+            stateListAnimator = null
+            setOnClickListener { action() }
+        }
+    }
+
+    private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radiusDp).toFloat()
     }
 
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            val provider = future.get()
-            val p = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
-            capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3).build()
-            try { provider.unbindAll(); provider.bindToLifecycle(this, androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA, p, capture) }
-            catch (e: Exception) { toast("Camera start failed: ${e.localizedMessage}") }
+            try {
+                val provider = future.get()
+                val cameraPreview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(preview.surfaceProvider)
+                }
+                capture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
+                    .build()
+                provider.unbindAll()
+                provider.bindToLifecycle(
+                    this,
+                    androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA,
+                    cameraPreview,
+                    capture
+                )
+                setStatus("CAMERA READY • Choose AI or Vivid")
+            } catch (e: Exception) {
+                setStatus("CAMERA ERROR • ${e.localizedMessage ?: "Unable to start"}")
+                toast("Camera start failed")
+            }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun takePhoto() {
-        val output = File(getExternalFilesDir(null), "capture_${System.currentTimeMillis()}.jpg")
+        if (busy) return
+        val imageCapture = capture
+        if (imageCapture == null) {
+            toast("Camera is not ready yet")
+            return
+        }
+
+        val selectedMode = mode
+        val output = File(cacheDir, "capture_${System.currentTimeMillis()}.jpg")
+        setBusy(true, "Capturing photo…")
         val options = ImageCapture.OutputFileOptions.Builder(output).build()
-        capture?.takePicture(options, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
-            override fun onError(exc: ImageCaptureException) { runOnUiThread { toast("Capture failed") } }
+
+        imageCapture.takePicture(options, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
+            override fun onError(exc: ImageCaptureException) {
+                output.delete()
+                showFailure("Capture failed: ${exc.message ?: "Camera error"}")
+            }
+
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                try {
-                    val bitmap = BitmapFactory.decodeFile(output.absolutePath) ?: error("Could not decode capture")
-                    val enhanced = enhance(bitmap)
-                    runOnUiThread { saveBitmap(enhanced); toast("Neural AI photo saved") }
-                } catch (e: Exception) {
-                    runOnUiThread { toast("Enhancement failed: ${e.localizedMessage}") }
-                } finally { output.delete() }
+                processingExecutor.execute {
+                    try {
+                        val bitmap = BitmapFactory.decodeFile(output.absolutePath)
+                            ?: throw IOException("Captured image could not be decoded")
+                        processAndPreview(bitmap, selectedMode)
+                    } catch (e: Exception) {
+                        showFailure("Enhancement failed: ${e.message ?: e.javaClass.simpleName}")
+                    } finally {
+                        output.delete()
+                    }
+                }
             }
         })
     }
 
-    private fun saveBitmap(bitmap: Bitmap) {
+    private fun processAndPreview(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode) {
+        try {
+            runOnUiThread { setStatus("Processing photo • ${selectedMode.name}…") }
+            val enhanced = enhance(bitmap, selectedMode)
+            runOnUiThread {
+                setBusy(false, "Enhancement complete • Review and save")
+                showSavePreview(enhanced)
+            }
+        } catch (e: Exception) {
+            showFailure("Enhancement failed: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    private fun showSavePreview(bitmap: Bitmap) {
+        val image = ImageView(this).apply {
+            setImageBitmap(bitmap)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            maxHeight = (resources.displayMetrics.heightPixels * 0.55f).toInt()
+            setBackgroundColor(Color.BLACK)
+        }
+        val scroll = ScrollView(this).apply {
+            addView(image, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Enhanced photo")
+            .setView(scroll)
+            .setPositiveButton("SAVE TO GALLERY", null)
+            .setNegativeButton("DISCARD", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { savePreview(bitmap, dialog) }
+        }
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(android.R.color.background_dark)
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.rgb(30, 150, 105))
+    }
+
+    private fun savePreview(bitmap: Bitmap, dialog: AlertDialog) {
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
+        setBusy(true, "Saving photo to Pictures/AICamera3rd…")
+        processingExecutor.execute {
+            try {
+                val uri = saveBitmap(bitmap)
+                runOnUiThread {
+                    dialog.dismiss()
+                    setBusy(false, "SAVED • Pictures/AICamera3rd")
+                    toast("Photo saved to Gallery")
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
+                    setBusy(false, "Save failed • Please try again")
+                    toast("Save failed: ${e.message ?: e.javaClass.simpleName}")
+                }
+            }
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun saveBitmap(bitmap: Bitmap): android.net.Uri {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, "AICamera3rd_$stamp.jpg")
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/AICamera3rd")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
         }
-        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
-        contentResolver.openOutputStream(uri)?.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 96, it) }
+
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Android could not create the gallery file")
+
+        try {
+            val stream = contentResolver.openOutputStream(uri)
+                ?: throw IOException("Could not open the gallery output stream")
+            stream.use {
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 96, it)) {
+                    throw IOException("JPEG encoding failed")
+                }
+                it.flush()
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val publish = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+                contentResolver.update(uri, publish, null, null)
+            }
+            return uri
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw e
+        }
     }
 
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+    private fun setBusy(value: Boolean, message: String) {
+        busy = value
+        setStatus(message)
+    }
+
+    private fun setStatus(message: String) {
+        if (::status.isInitialized) status.text = message
+    }
+
+    private fun showFailure(message: String) {
+        runOnUiThread {
+            setBusy(false, message)
+            toast(message)
+        }
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+
     override fun onDestroy() {
+        cameraExecutor.shutdownNow()
+        processingExecutor.shutdownNow()
+        modelExecutor.shutdownNow()
         maximEnhancer?.close()
         denoiser?.close()
         sceneSegmenter?.close()
         faceProtector?.close()
         super.onDestroy()
-        cameraExecutor.shutdown()
     }
 }
