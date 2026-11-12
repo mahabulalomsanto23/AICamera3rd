@@ -61,8 +61,8 @@ def smoke(path: Path, expected_input=None, min_classes=None):
     shape = ins[0]["shape"]
     if expected_input and list(shape) != expected_input:
         raise RuntimeError(f"{path.name}: expected input {expected_input}, got {shape}")
-    if min_classes and (len(outs[0]["shape"]) != 4 or int(outs[0]["shape"][-1]) < min_classes):
-        raise RuntimeError(f"{path.name}: expected at least {min_classes} classes, got {outs[0]['shape']}")
+    if min_classes and (len(outs[0]["shape"]) != 4 or (int(outs[0]["shape"][-1]) != 1 and int(outs[0]["shape"][-1]) < min_classes)):
+        raise RuntimeError(f"{path.name}: expected ADE20K label map or class scores, got {outs[0]['shape']}")
     sample = np.zeros(shape, dtype=ins[0]["dtype"])
     interpreter.set_tensor(ins[0]["index"], sample)
     interpreter.invoke()
@@ -78,8 +78,8 @@ smoke(naf, [1, 3, 256, 256])
 
 seg_archive = ASSETS / "ade20k_tfhub_download"
 seg_model = ASSETS / "deeplabv3_ade20k.tflite"
-fetch("https://tfhub.dev/sayakpaul/deeplabv3-mobilenetv2-ade20k/1/default/2?lite-format=tflite", seg_archive)
+fetch("https://github.com/mlcommons/mobile_models/raw/9c7b31ce63ff0331bd659ac2609c4e68b6b4ec0f/v0_7/tflite/deeplabv3_mnv2_ade20k_float.tflite", seg_archive)
 extract_tflite(seg_archive, seg_model)
 seg_archive.unlink(missing_ok=True)
-smoke(seg_model, min_classes=100)
+smoke(seg_model, expected_input=[1, 512, 512, 3], min_classes=100)
 print("NAFNet and ADE20K model download + CPU smoke inference passed")
