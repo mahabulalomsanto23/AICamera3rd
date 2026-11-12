@@ -545,7 +545,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { setStatus("Processing gallery photo • ${selectedMode.name}…") }
             enhanced = enhance(bitmap, selectedMode)
             if (enhanced !== bitmap && !bitmap.isRecycled) bitmap.recycle()
-            val result = enhanced
+            val result = enhanced ?: throw IllegalStateException("Enhancement returned no image")
             enhanced = null
             handedOff = true
             runOnUiThread { showGalleryResult(result, selectedMode) }
