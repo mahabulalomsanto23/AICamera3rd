@@ -28,4 +28,5 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("org.tensorflow:tensorflow-lite:2.15.0")
+    implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.15.0")
 }
