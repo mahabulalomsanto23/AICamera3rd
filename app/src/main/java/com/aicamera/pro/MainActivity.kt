@@ -86,7 +86,6 @@ class MainActivity : AppCompatActivity() {
         processingExecutor = Executors.newSingleThreadExecutor()
         modelExecutor = Executors.newSingleThreadExecutor()
         buildUi()
-        previousCrash?.let { CrashReporter.offerShare(this, it) }
         loadModels()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
