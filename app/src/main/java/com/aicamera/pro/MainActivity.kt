@@ -2,6 +2,8 @@ package com.aicamera.pro
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Intent
+import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -12,6 +14,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.view.Gravity
 import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -67,7 +70,7 @@ class MainActivity : AppCompatActivity() {
         processingExecutor.execute {
             try {
                 val bitmap = decodeGalleryImage(uri)
-                processAndSave(bitmap, selectedMode)
+                processGalleryForPreview(bitmap, selectedMode)
             } catch (e: Exception) {
                 showFailure("Photo processing failed: ${e.message ?: e.javaClass.simpleName}")
             }
@@ -182,6 +185,12 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.BLACK)
         }
         root.addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1))
+        root.post {
+            val frameWidth = root.width
+            if (frameWidth > 0) {
+                preview.layoutParams = android.widget.FrameLayout.LayoutParams(frameWidth, (frameWidth * 3f / 4f).toInt(), Gravity.CENTER)
+            }
+        }
 
         // Minimal camera-style top bar: brand at left, compact processing status at right.
         val topBar = LinearLayout(this).apply {
@@ -326,10 +335,16 @@ class MainActivity : AppCompatActivity() {
             weight = 1f
             gravity = Gravity.CENTER
         })
-        val spacer = TextView(this).apply { text = "" }
-        captureRow.addView(spacer, LinearLayout.LayoutParams(dp(54), dp(54)).apply {
-            marginEnd = dp(22)
-        })
+        val recentButton = TextView(this).apply {
+            text = "▣"
+            textSize = 25f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            contentDescription = "View captured photos"
+            background = rounded(0x55333333, 50)
+            setOnClickListener { if (!busy) openCapturedPhotos() }
+        }
+        captureRow.addView(recentButton, LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginEnd = dp(22) })
         bottomPanel.addView(captureRow, LinearLayout.LayoutParams(-1, dp(76)))
 
         val hint = TextView(this).apply {
@@ -519,6 +534,97 @@ class MainActivity : AppCompatActivity() {
         var sample = 1
         while (maxOf(width / sample, height / sample) > maxEdge) sample *= 2
         return sample
+    }
+
+
+    /** Gallery imports require explicit Save; Cancel discards the enhanced result. */
+    private fun processGalleryForPreview(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode) {
+        var enhanced: Bitmap? = null
+        try {
+            runOnUiThread { setStatus("Processing gallery photo • ${selectedMode.name}…") }
+            enhanced = enhance(bitmap, selectedMode)
+            if (enhanced !== bitmap && !bitmap.isRecycled) bitmap.recycle()
+            val result = enhanced
+            enhanced = null
+            runOnUiThread { showGalleryResult(result, selectedMode) }
+        } catch (e: Exception) {
+            showFailure("Photo processing failed: ${e.message ?: e.javaClass.simpleName}")
+        } finally {
+            if (enhanced != null && enhanced !== bitmap && !enhanced.isRecycled) enhanced.recycle()
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
+    private fun showGalleryResult(result: Bitmap, selectedMode: ColorEnhancer.Mode) {
+        val image = ImageView(this).apply {
+            setImageBitmap(result)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.BLACK)
+            adjustViewBounds = true
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(4))
+            setBackgroundColor(Color.BLACK)
+            addView(image, LinearLayout.LayoutParams(-1, dp(430)))
+        }
+        val dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Enhanced photo • ${selectedMode.name}")
+            .setView(content)
+            .setPositiveButton("SAVE", null)
+            .setNegativeButton("CANCEL", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                try {
+                    saveBitmap(result)
+                    if (!result.isRecycled) result.recycle()
+                    dialog.dismiss()
+                    setBusy(false, "SAVED • Pictures/AICamera3rd")
+                    toast("Enhanced photo saved to Gallery")
+                } catch (e: Exception) {
+                    toast("Save failed: ${e.message ?: e.javaClass.simpleName}")
+                }
+            }
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+                if (!result.isRecycled) result.recycle()
+                dialog.dismiss()
+                setBusy(false, "READY • Camera")
+                toast("Gallery edit cancelled")
+            }
+        }
+        dialog.setOnCancelListener {
+            if (!result.isRecycled) result.recycle()
+            setBusy(false, "READY • Camera")
+        }
+        dialog.show()
+        dialog.window?.setLayout((resources.displayMetrics.widthPixels * 0.94f).toInt(), android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+        setStatus("REVIEW • SAVE OR CANCEL")
+    }
+
+    /** Open the newest photo saved by this app in the phone's image viewer. */
+    private fun openCapturedPhotos() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            toast("Captured photos are saved in Pictures/AICamera3rd")
+            return
+        }
+        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val selection = "${MediaStore.Images.Media.RELATIVE_PATH} = ?"
+        val selectionArgs = arrayOf("Pictures/AICamera3rd/")
+        val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+        val uri = contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+            if (cursor.moveToFirst()) ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+            ) else null
+        }
+        if (uri == null) { toast("No captured photos yet"); return }
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "image/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        } catch (_: Exception) { toast("No photo viewer is available") }
     }
 
     private fun processAndSave(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode) {
