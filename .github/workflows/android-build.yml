@@ -21,6 +21,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install tensorflow-cpu==2.15.1 huggingface_hub==0.26.5
           python tools/convert_maxim_fivek.py
+          python tools/download_extra_models.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -47,4 +48,4 @@ jobs:
           APK_NAME: ${{ steps.apk.outputs.name }}
         run: |
           gh release delete latest --yes || true
-          gh release create latest "$APK_NAME" --title "AI Camera Pro latest" --notes "Bundled offline MAXIM FiveK neural enhancement model. Filename uses Bangladesh time."
+          gh release create latest "$APK_NAME" --title "AI Camera Pro latest" --notes "Bundled offline NAFNet-SIDD denoiser, Google MAXIM FiveK enhancer and ADE20K scene segmentation models. Filename uses Bangladesh time."
