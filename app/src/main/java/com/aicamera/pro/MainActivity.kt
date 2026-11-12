@@ -35,6 +35,8 @@ class MainActivity : AppCompatActivity() {
     private var mode = ColorEnhancer.Mode.AI
     @Volatile private var maximEnhancer: MaximEnhancer? = null
     @Volatile private var faceProtector: FaceProtector? = null
+    @Volatile private var denoiser: NafNetDenoiser? = null
+    @Volatile private var sceneSegmenter: SceneSegmenter? = null
     @Volatile private var modelError: String? = null
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -62,8 +64,10 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor.execute {
             try {
                 maximEnhancer = MaximEnhancer(this)
+                denoiser = NafNetDenoiser(this)
+                sceneSegmenter = SceneSegmenter(this)
                 faceProtector = FaceProtector()
-                runOnUiThread { status.text = "AI MODE • MAXIM + FACE AI • OFFLINE" }
+                runOnUiThread { status.text = "AI MODE • NAFNET + MAXIM + SCENE AI • OFFLINE" }
             } catch (e: Exception) {
                 modelError = e.localizedMessage ?: "Model initialization failed"
                 runOnUiThread { status.text = "AI MODEL ERROR • ${modelError}" }
@@ -75,9 +79,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun enhance(bitmap: Bitmap): Bitmap = when (mode) {
         ColorEnhancer.Mode.AI -> {
-            val enhanced = maximEnhancer?.enhance(bitmap)
-                ?: throw IllegalStateException(modelError ?: "Neural model is still loading")
-            faceProtector?.protect(bitmap, enhanced) ?: enhanced
+            val denoised = denoiser?.denoise(bitmap) ?: throw IllegalStateException("NAFNet denoiser is still loading")
+            val maxim = maximEnhancer?.enhance(denoised)
+                ?: throw IllegalStateException(modelError ?: "MAXIM neural model is still loading")
+            val sceneAware = sceneSegmenter?.apply(denoised, maxim) ?: maxim
+            faceProtector?.protect(bitmap, sceneAware) ?: sceneAware
         }
         ColorEnhancer.Mode.VIVID -> ColorEnhancer.enhance(bitmap, ColorEnhancer.Mode.VIVID)
     }
@@ -150,6 +156,8 @@ class MainActivity : AppCompatActivity() {
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     override fun onDestroy() {
         maximEnhancer?.close()
+        denoiser?.close()
+        sceneSegmenter?.close()
         faceProtector?.close()
         super.onDestroy()
         cameraExecutor.shutdown()
