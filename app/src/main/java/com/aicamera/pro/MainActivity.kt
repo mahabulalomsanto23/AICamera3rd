@@ -11,15 +11,10 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.Gravity
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -72,7 +67,7 @@ class MainActivity : AppCompatActivity() {
         processingExecutor.execute {
             try {
                 val bitmap = decodeGalleryImage(uri)
-                processAndPreview(bitmap, selectedMode)
+                processAndSave(bitmap, selectedMode)
             } catch (e: Exception) {
                 showFailure("Photo processing failed: ${e.message ?: e.javaClass.simpleName}")
             }
@@ -148,10 +143,29 @@ class MainActivity : AppCompatActivity() {
         val maximModel = maximEnhancer
             ?: throw IllegalStateException(maximError ?: "MAXIM is still loading. Please wait.")
 
-        val denoised = denoiserModel.denoise(bitmap)
-        val maxim = maximModel.enhance(denoised)
-        val sceneAware = sceneSegmenter?.let { it.apply(denoised, maxim) } ?: maxim
-        return faceProtector?.let { it.protect(bitmap, sceneAware) } ?: sceneAware
+        runOnUiThread { setStatus("AI • DENOISING DETAILS…") }
+        val denoised = denoiserModel.denoise(bitmap) { done, total ->
+            if (done == 1 || done == total || done % 4 == 0) {
+                runOnUiThread { setStatus("AI • DENOISING $done/$total") }
+            }
+        }
+        try {
+            runOnUiThread { setStatus("AI • ENHANCING COLORS…") }
+            val maxim = maximModel.enhance(denoised)
+            try {
+                runOnUiThread { setStatus("AI • SCENE & FACE REFINEMENT…") }
+                val sceneAware = sceneSegmenter?.let { it.apply(denoised, maxim) } ?: maxim
+                try {
+                    return faceProtector?.let { it.protect(bitmap, sceneAware) } ?: sceneAware
+                } finally {
+                    if (sceneAware !== maxim && !sceneAware.isRecycled) sceneAware.recycle()
+                }
+            } finally {
+                if (!maxim.isRecycled) maxim.recycle()
+            }
+        } finally {
+            if (!denoised.isRecycled) denoised.recycle()
+        }
     }
 
     private fun buildUi() {
@@ -443,7 +457,7 @@ class MainActivity : AppCompatActivity() {
                 processingExecutor.execute {
                     try {
                         val bitmap = decodeCapturedImage(output)
-                        processAndPreview(bitmap, selectedMode)
+                        processAndSave(bitmap, selectedMode)
                     } catch (e: Exception) {
                         showFailure("Enhancement failed: ${e.message ?: e.javaClass.simpleName}")
                     } finally {
@@ -461,7 +475,8 @@ class MainActivity : AppCompatActivity() {
      * multi-hundred-megabyte bitmap allocations on mobile devices.
      */
     private fun decodeGalleryImage(uri: android.net.Uri): Bitmap {
-        val maxEdge = 2560
+        // 8MP-class processing cap balances detail with Snapdragon-class mobile performance.
+        val maxEdge = 2048
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = android.graphics.ImageDecoder.createSource(contentResolver, uri)
             return android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
@@ -493,7 +508,7 @@ class MainActivity : AppCompatActivity() {
         BitmapFactory.decodeFile(file.absolutePath, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException("Captured image is invalid")
         val options = BitmapFactory.Options().apply {
-            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, 2560)
+            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, 2048)
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         return BitmapFactory.decodeFile(file.absolutePath, options)
@@ -506,67 +521,26 @@ class MainActivity : AppCompatActivity() {
         return sample
     }
 
-    private fun processAndPreview(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode) {
+    private fun processAndSave(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode) {
+        var enhanced: Bitmap? = null
         try {
             runOnUiThread { setStatus("Processing photo • ${selectedMode.name}…") }
-            val enhanced = enhance(bitmap, selectedMode)
+            enhanced = enhance(bitmap, selectedMode)
+            runOnUiThread { setStatus("Saving enhanced photo to Gallery…") }
+            saveBitmap(enhanced)
             runOnUiThread {
-                setBusy(false, "Enhancement complete • Review and save")
-                showSavePreview(enhanced)
+                setBusy(false, "SAVED • Pictures/AICamera3rd")
+                toast("${selectedMode.name} photo saved to Gallery")
             }
         } catch (e: Exception) {
-            showFailure("Enhancement failed: ${e.message ?: e.javaClass.simpleName}")
+            showFailure("Enhancement/save failed: ${e.message ?: e.javaClass.simpleName}")
+        } finally {
+            if (enhanced != null && enhanced !== bitmap && !enhanced.isRecycled) enhanced.recycle()
+            if (!bitmap.isRecycled) bitmap.recycle()
         }
     }
 
-    private fun showSavePreview(bitmap: Bitmap) {
-        val image = ImageView(this).apply {
-            setImageBitmap(bitmap)
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            maxHeight = (resources.displayMetrics.heightPixels * 0.55f).toInt()
-            setBackgroundColor(Color.BLACK)
-        }
-        val scroll = ScrollView(this).apply {
-            addView(image, ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Enhanced photo")
-            .setView(scroll)
-            .setPositiveButton("SAVE TO GALLERY", null)
-            .setNegativeButton("DISCARD", null)
-            .create()
-
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { savePreview(bitmap, dialog) }
-        }
-        dialog.show()
-        dialog.window?.setBackgroundDrawableResource(android.R.color.background_dark)
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.rgb(30, 150, 105))
-    }
-
-    private fun savePreview(bitmap: Bitmap, dialog: AlertDialog) {
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-        setBusy(true, "Saving photo to Pictures/AICamera3rd…")
-        processingExecutor.execute {
-            try {
-                val uri = saveBitmap(bitmap)
-                runOnUiThread {
-                    dialog.dismiss()
-                    setBusy(false, "SAVED • Pictures/AICamera3rd")
-                    toast("Photo saved to Gallery")
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
-                    setBusy(false, "Save failed • Please try again")
-                    toast("Save failed: ${e.message ?: e.javaClass.simpleName}")
-                }
-            }
-        }
-    }
-
-    @Throws(IOException::class)
+        @Throws(IOException::class)
     private fun saveBitmap(bitmap: Bitmap): android.net.Uri {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val values = ContentValues().apply {

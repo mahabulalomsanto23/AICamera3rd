@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -14,6 +16,7 @@ import kotlin.math.min
 /** NAFNet-SIDD width-32 local denoiser. Uses overlapping 256px tiles. */
 class NafNetDenoiser(context: Context) : AutoCloseable {
     private val interpreter: Interpreter
+    private var gpuDelegate: GpuDelegate? = null
 
     init {
         val file = File(context.filesDir, "nafnet_sidd_width32_fp16.tflite")
@@ -22,7 +25,20 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
                 FileOutputStream(file).use { input.copyTo(it) }
             }
         }
-        interpreter = Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
+        // Prefer Adreno GPU acceleration on supported phones; safely fall back to CPU.
+        val compatibility = CompatibilityList()
+        interpreter = if (compatibility.isDelegateSupportedOnThisDevice) {
+            val delegate = GpuDelegate(compatibility.bestOptionsForThisDevice)
+            try {
+                val options = Interpreter.Options().apply { addDelegate(delegate) }
+                Interpreter(file, options).also { gpuDelegate = delegate }
+            } catch (_: Exception) {
+                delegate.close()
+                Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
+            }
+        } else {
+            Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
+        }
         require(interpreter.getInputTensor(0).shape().contentEquals(intArrayOf(1, 3, 256, 256))) {
             "Unexpected NAFNet input: ${interpreter.getInputTensor(0).shape().contentToString()}"
         }
@@ -31,7 +47,7 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
         }
     }
 
-    fun denoise(source: Bitmap): Bitmap {
+    fun denoise(source: Bitmap, onProgress: ((Int, Int) -> Unit)? = null): Bitmap {
         val w = source.width
         val h = source.height
         val pixels = IntArray(w * h)
@@ -44,6 +60,8 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
         val output = ByteBuffer.allocateDirect(3 * tile * tile * 4).order(ByteOrder.nativeOrder())
         val patch = IntArray(tile * tile)
         val planes = Array(3) { FloatArray(tile * tile) }
+        val totalTiles = ((h + stride - 1) / stride) * ((w + stride - 1) / stride)
+        var completedTiles = 0
         var top = 0
         while (top < h) {
             var left = 0
@@ -87,6 +105,8 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
                     result[idx] = (0xFF shl 24) or (nr shl 16) or (ng shl 8) or nb
                     weight[idx] = oldW + addW
                 }
+                completedTiles++
+                onProgress?.invoke(completedTiles, totalTiles)
                 left += stride
             }
             top += stride
@@ -94,5 +114,9 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
         return Bitmap.createBitmap(result, w, h, Bitmap.Config.ARGB_8888)
     }
 
-    override fun close() = interpreter.close()
+    override fun close() {
+        interpreter.close()
+        gpuDelegate?.close()
+        gpuDelegate = null
+    }
 }

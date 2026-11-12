@@ -9,8 +9,8 @@ android {
         applicationId = "com.aicamera.pro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
     }
     androidResources { noCompress += "tflite" }
     compileOptions {
@@ -28,6 +28,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("org.tensorflow:tensorflow-lite:2.15.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.15.0")
     implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.15.0")
     // Bundled on-device face detector; no first-run model download or photo upload.
     implementation("com.google.mlkit:face-detection:16.1.7")
