@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.CompatibilityList
 import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.File
 import java.io.FileOutputStream
@@ -25,18 +24,19 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
                 FileOutputStream(file).use { input.copyTo(it) }
             }
         }
-        // Prefer Adreno GPU acceleration on supported phones; safely fall back to CPU.
-        val compatibility = CompatibilityList()
-        interpreter = if (compatibility.isDelegateSupportedOnThisDevice) {
-            val delegate = GpuDelegate(compatibility.bestOptionsForThisDevice)
+        // Try the default Adreno GPU delegate without CompatibilityList's
+        // optional Options class (which is missing in some TFLite dependency graphs).
+        // If the device/driver cannot initialize it, transparently use 4 CPU threads.
+        interpreter = try {
+            val delegate = GpuDelegate()
             try {
-                val options = Interpreter.Options().apply { addDelegate(delegate) }
-                Interpreter(file, options).also { gpuDelegate = delegate }
-            } catch (_: Exception) {
+                Interpreter(file, Interpreter.Options().apply { addDelegate(delegate) })
+                    .also { gpuDelegate = delegate }
+            } catch (e: Exception) {
                 delegate.close()
-                Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
+                throw e
             }
-        } else {
+        } catch (_: Exception) {
             Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
         }
         require(interpreter.getInputTensor(0).shape().contentEquals(intArrayOf(1, 3, 256, 256))) {
