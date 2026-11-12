@@ -58,7 +58,13 @@ class MainActivity : AppCompatActivity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF000000.toInt()) }
         preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.COMPATIBLE }
-        root.addView(preview, LinearLayout.LayoutParams(-1, 0, 1f))
+        // Match the native camera framing: full device width, 4:3 image viewport.
+        // The preview is NOT stretched to fill the remaining screen height.
+        preview.post {
+            val width = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+            preview.layoutParams = LinearLayout.LayoutParams(width, width * 3 / 4)
+        }
+        root.addView(preview, LinearLayout.LayoutParams(-1, -2))
         status = TextView(this).apply { text = "AI MODE • DAYLIGHT COLOR"; setTextColor(-1); gravity = Gravity.CENTER; textSize = 12f; setPadding(8,10,8,6) }
         root.addView(status)
         val modes = LinearLayout(this).apply { gravity = Gravity.CENTER; setPadding(8,4,8,8) }
