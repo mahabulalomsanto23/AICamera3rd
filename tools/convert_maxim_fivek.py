@@ -68,20 +68,26 @@ model = converter.convert()
 interpreter = tf.lite.Interpreter(model_content=model, num_threads=2)
 interpreter.allocate_tensors()
 inp = interpreter.get_input_details()[0]
-out = interpreter.get_output_details()[0]
+outputs = interpreter.get_output_details()
+print("All MAXIM outputs:", [(o["index"], o["name"], o["shape"].tolist(), str(o["dtype"])) for o in outputs])
 if list(inp["shape"]) != [1, 256, 256, 3]:
     raise RuntimeError(f"Unexpected MAXIM input tensor: {inp['shape']}")
-if list(out["shape"]) != [1, 256, 256, 3]:
-    raise RuntimeError(f"Unexpected MAXIM output tensor: {out['shape']}")
+matches = [(i, o) for i, o in enumerate(outputs) if list(o["shape"]) == [1, 256, 256, 3]]
+if not matches:
+    raise RuntimeError("No full-resolution MAXIM output [1,256,256,3]; outputs were: " +
+                       repr([(o["name"], o["shape"].tolist()) for o in outputs]))
 
 sample = np.zeros(inp["shape"], dtype=inp["dtype"])
 interpreter.set_tensor(inp["index"], sample)
 interpreter.invoke()
-result = interpreter.get_tensor(out["index"])
-if not np.isfinite(result).all():
-    raise RuntimeError("MAXIM smoke inference produced NaN or infinite values")
+for _, out in matches:
+    result = interpreter.get_tensor(out["index"])
+    if not np.isfinite(result).all():
+        raise RuntimeError(f"MAXIM smoke inference produced NaN/Inf for {out['name']}")
 
 out_path.write_bytes(model)
 print("MAXIM FiveK TFLite:", out_path, len(model), "bytes")
-print("Input:", inp["shape"], inp["dtype"], "Output:", out["shape"], out["dtype"])
+print("Input:", inp["shape"], inp["dtype"], "Full-resolution output(s):",
+      [(o["index"], o["shape"].tolist(), str(o["dtype"])) for _, o in matches])
+print("MAXIM TFLite conversion and smoke inference passed")
 print("MAXIM TFLite conversion and smoke inference passed")
