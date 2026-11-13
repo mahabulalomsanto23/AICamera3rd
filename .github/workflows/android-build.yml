@@ -165,7 +165,7 @@ jobs:
           adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
           echo "Starting AI processing on the supplied photo through the debug benchmark activity…"
           BENCHMARK_DONE=""
-          adb logcat -v time "AICameraProcessing:I" "AICameraBenchmark:I" "*:S" > "$ROOT/ai-benchmark-logcat.txt" 2>&1 &
+          adb logcat -v time "AICameraProcessing:I" "AICameraBenchmark:I" "AICameraNafNet:I" "*:S" > "$ROOT/ai-benchmark-logcat.txt" 2>&1 &
           LOGCAT_PID=$!
           timeout 90s adb shell am start -n com.aicamera.pro/.BenchmarkActivity \
             --es com.aicamera.pro.extra.INPUT "$DEVICE_INPUT" \
