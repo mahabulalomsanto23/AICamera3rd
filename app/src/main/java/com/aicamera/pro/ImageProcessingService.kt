@@ -110,6 +110,7 @@ class ImageProcessingService : Service() {
         try {
             updateProgress("Enhancing colors", 0, 0)
             val enhanced = maxim!!.enhance(denoised)
+            if (!denoised.isRecycled) denoised.recycle()
             var sceneResult: Bitmap? = null
             try {
                 updateProgress("Refining scene and face details", 0, 0)
