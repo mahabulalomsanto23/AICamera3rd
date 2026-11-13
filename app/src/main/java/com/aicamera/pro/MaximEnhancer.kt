@@ -47,6 +47,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         val small = Bitmap.createScaledBitmap(original, 256, 256, true)
         val sourcePixels = IntArray(256 * 256)
         small.getPixels(sourcePixels, 0, 256, 0, 0, 256, 256)
+        if (small !== original && !small.isRecycled) small.recycle()
 
         val inputTensor = interpreter.getInputTensor(0)
         val outputTensor = interpreter.getOutputTensor(outputIndex)
@@ -112,9 +113,11 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         }
         val deltaBitmap = Bitmap.createBitmap(deltaPixels, 256, 256, Bitmap.Config.ARGB_8888)
         val fullDelta = Bitmap.createScaledBitmap(deltaBitmap, original.width, original.height, true)
+        if (!deltaBitmap.isRecycled) deltaBitmap.recycle()
         val deltas = IntArray(original.width * original.height)
         val base = IntArray(deltas.size)
         fullDelta.getPixels(deltas, 0, original.width, 0, 0, original.width, original.height)
+        if (!fullDelta.isRecycled) fullDelta.recycle()
         original.getPixels(base, 0, original.width, 0, 0, original.width, original.height)
         for (i in base.indices) {
             val c = base[i]
