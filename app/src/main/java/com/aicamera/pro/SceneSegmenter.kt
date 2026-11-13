@@ -123,6 +123,7 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         val small = Bitmap.createScaledBitmap(source, inputW, inputH, true)
         val rgb = IntArray(inputW * inputH)
         small.getPixels(rgb, 0, inputW, 0, 0, inputW, inputH)
+        if (small !== source && !small.isRecycled) small.recycle()
         val tensor = interpreter.getInputTensor(0)
         val input = ByteBuffer.allocateDirect(tensor.numBytes()).order(ByteOrder.nativeOrder())
         when (tensor.dataType()) {
