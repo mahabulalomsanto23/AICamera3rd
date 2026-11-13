@@ -62,11 +62,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build debug APK with bundled neural model
+      - name: Build ABI-specific debug APKs with bundled neural model
         run: gradle assembleDebug
+          test -s app/build/outputs/apk/debug/app-x86_64-debug.apk
+          test -s app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          ls -lh app/build/outputs/apk/debug/*.apk
       - name: Verify APK signature and archive integrity
         run: |
-          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
+          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk"
           test -f "$APK"
           zip -T "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
@@ -81,7 +84,7 @@ jobs:
           #!/usr/bin/env bash
           set -Eeuo pipefail
           ROOT="${GITHUB_WORKSPACE:-$PWD}"
-          APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
+          APK="$ROOT/app/build/outputs/apk/debug/app-x86_64-debug.apk"
           STAGE="initialize"
           APP_PID=""
 
@@ -243,7 +246,7 @@ jobs:
         run: |
           STAMP=$(TZ=Asia/Dhaka date +'%Y%m%d-%H%M%S-BD')
           NAME="AI-Camera-Pro-OnePlus8-${STAMP}.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$NAME"
+          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk "$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           sha256sum "$NAME" > "$NAME.sha256"
       - uses: actions/upload-artifact@v4
