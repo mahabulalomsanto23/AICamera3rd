@@ -141,6 +141,33 @@ jobs:
           APP_PID_AFTER="$(adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
           test -n "$APP_PID_AFTER"
           echo "App remained running for 30 seconds on the cloud Android emulator."
+
+          STAGE="ai-processing-benchmark"
+          adb logcat -c
+          echo "Starting deterministic 1600x1200 offline AI benchmark…"
+          adb shell am start-foreground-service -n com.aicamera.pro/.ImageProcessingService \
+            --es com.aicamera.pro.extra.INPUT benchmark://generated \
+            --es com.aicamera.pro.extra.MODE AI
+          BENCHMARK_DONE=""
+          for attempt in $(seq 1 900); do
+            adb logcat -d -s AICameraProcessing:I AICameraProcessing:E 2>/dev/null | grep -E "BENCHMARK_RESULT" > "$ROOT/ai-benchmark.txt" || true
+            if grep -q "BENCHMARK_RESULT" "$ROOT/ai-benchmark.txt"; then
+              BENCHMARK_DONE="yes"
+              break
+            fi
+            sleep 2
+          done
+          adb logcat -d -v time -s AICameraProcessing:I AICameraProcessing:E > "$ROOT/ai-benchmark-logcat.txt" 2>&1 || true
+          if [[ "$BENCHMARK_DONE" != "yes" ]]; then
+            echo "AI benchmark did not finish within 30 minutes." | tee "$ROOT/ai-benchmark.txt"
+            adb shell pidof com.aicamera.pro || true
+            exit 1
+          fi
+          cat "$ROOT/ai-benchmark.txt"
+          if grep -q "status=failure" "$ROOT/ai-benchmark.txt"; then
+            echo "AI processing benchmark reported a failure."
+            exit 1
+          fi
           STAGE="completed"
           SCRIPT
           chmod +x .github/emulator-smoke.sh
@@ -163,6 +190,8 @@ jobs:
           path: |
             ${{ github.workspace }}/emulator-logcat.txt
             ${{ github.workspace }}/emulator-smoke-summary.txt
+            ${{ github.workspace }}/ai-benchmark.txt
+            ${{ github.workspace }}/ai-benchmark-logcat.txt
           if-no-files-found: ignore
       - name: Name APK with Bangladesh time
         id: apk
