@@ -2,6 +2,8 @@ package com.aicamera.pro
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.util.Log
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
@@ -41,6 +43,8 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
         val planes = Array(3) { FloatArray(tile * tile) }
         val totalTiles = ((h + stride - 1) / stride) * ((w + stride - 1) / stride)
         var completedTiles = 0
+        val denoiseStarted = SystemClock.elapsedRealtime()
+        Log.i(TAG, "denoise_start size=${w}x$h tiles=$totalTiles")
         var top = 0
         while (top < h) {
             var left = 0
@@ -58,7 +62,11 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
                     input.putFloat(v / 255f)
                 }
                 input.rewind()
+                val inferenceStarted = SystemClock.elapsedRealtime()
+                Log.i(TAG, "tile_start index=${completedTiles + 1}/$totalTiles size=${w}x$h")
                 interpreter.run(input, output)
+                val inferenceMs = SystemClock.elapsedRealtime() - inferenceStarted
+                Log.i(TAG, "tile_inference_done index=${completedTiles + 1}/$totalTiles inference_ms=$inferenceMs")
                 output.rewind()
                 for (channel in 0..2) for (i in 0 until tile * tile) planes[channel][i] = output.float.coerceIn(0f, 1f)
                 val endY = min(h, top + stride)
@@ -86,6 +94,7 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
                 }
                 completedTiles++
                 onProgress?.invoke(completedTiles, totalTiles)
+                Log.i(TAG, "tile_complete index=$completedTiles/$totalTiles elapsed_ms=${SystemClock.elapsedRealtime() - denoiseStarted}")
                 left += stride
             }
             top += stride
@@ -95,5 +104,9 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
 
     override fun close() {
         interpreter.close()
+    }
+
+    companion object {
+        private const val TAG = "AICameraNafNet"
     }
 }
