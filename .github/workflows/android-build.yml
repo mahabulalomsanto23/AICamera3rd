@@ -34,6 +34,7 @@ jobs:
       - name: Verify APK signature and archive integrity
         run: |
           APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
           zip -T "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           test -n "$APKSIGNER"
@@ -51,7 +52,16 @@ jobs:
           disable-animations: true
           script: |
             set +e
-            APK="app/build/outputs/apk/debug/app-debug.apk"
+            APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
+            if [ ! -f "$APK" ]; then
+              echo "Expected APK missing; searching build outputs..."
+              APK=$(find "$GITHUB_WORKSPACE/app/build/outputs/apk" -type f -name '*.apk' | head -n 1)
+            fi
+            echo "APK selected: $APK"
+            if [ -z "$APK" ] || [ ! -f "$APK" ]; then
+              echo "No APK found under $GITHUB_WORKSPACE/app/build/outputs/apk"
+              exit 2
+            fi
             adb logcat -c
             adb install -r "$APK"
             INSTALL_STATUS=$?
