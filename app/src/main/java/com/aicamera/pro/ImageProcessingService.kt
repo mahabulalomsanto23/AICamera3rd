@@ -117,6 +117,9 @@ class ImageProcessingService : Service() {
         val denoised = denoiser!!.denoise(source) { done, total ->
             if (done == 1 || done == total || done % 2 == 0) {
                 updateProgress("Denoising details", done, total)
+            if (done == 1 || done == total || done % 2 == 0) {
+                android.util.Log.i(TAG, "BENCHMARK_STAGE denoise_progress=$done/$total")
+            }
             }
         }
         android.util.Log.i(TAG, "BENCHMARK_STAGE denoise_ms=${SystemClock.elapsedRealtime() - denoiseStarted}")
