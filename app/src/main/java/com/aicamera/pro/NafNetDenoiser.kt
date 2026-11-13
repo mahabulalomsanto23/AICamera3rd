@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -15,7 +14,6 @@ import kotlin.math.min
 /** NAFNet-SIDD width-32 local denoiser. Uses overlapping 256px tiles. */
 class NafNetDenoiser(context: Context) : AutoCloseable {
     private val interpreter: Interpreter
-    private var gpuDelegate: GpuDelegate? = null
 
     init {
         val file = File(context.filesDir, "nafnet_sidd_width32_fp16.tflite")
@@ -24,21 +22,10 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
                 FileOutputStream(file).use { input.copyTo(it) }
             }
         }
-        // Try the default Adreno GPU delegate without CompatibilityList's
-        // optional Options class (which is missing in some TFLite dependency graphs).
-        // If the device/driver cannot initialize it, transparently use 4 CPU threads.
-        interpreter = try {
-            val delegate = GpuDelegate()
-            try {
-                Interpreter(file, Interpreter.Options().apply { addDelegate(delegate) })
-                    .also { gpuDelegate = delegate }
-            } catch (e: Exception) {
-                delegate.close()
-                throw e
-            }
-        } catch (_: Exception) {
-            Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
-        }
+        // Use the CPU backend for device compatibility. Creating the Adreno GPU
+        // delegate during initialization can terminate some vendor-driver processes
+        // with a native signal that Java exception handlers cannot catch.
+        interpreter = Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
         require(interpreter.getInputTensor(0).shape().contentEquals(intArrayOf(1, 3, 256, 256))) {
             "Unexpected NAFNet input: ${interpreter.getInputTensor(0).shape().contentToString()}"
         }
@@ -116,7 +103,5 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
 
     override fun close() {
         interpreter.close()
-        gpuDelegate?.close()
-        gpuDelegate = null
     }
 }
