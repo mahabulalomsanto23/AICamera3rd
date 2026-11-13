@@ -46,6 +46,7 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         val small = Bitmap.createScaledBitmap(source, inputW, inputH, true)
         val rgb = IntArray(inputW * inputH)
         small.getPixels(rgb, 0, inputW, 0, 0, inputW, inputH)
+        if (small !== source && !small.isRecycled) small.recycle()
         val tensor = interpreter.getInputTensor(0)
         val input = ByteBuffer.allocateDirect(tensor.numBytes()).order(ByteOrder.nativeOrder())
         when (tensor.dataType()) {
@@ -178,7 +179,9 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         }
         val maskPixels = IntArray(labels.size) { i -> if (labels[i] == 12) Color.WHITE else Color.BLACK }
         val lowMask = Bitmap.createBitmap(maskPixels, outputW, outputH, Bitmap.Config.ARGB_8888)
-        return Bitmap.createScaledBitmap(lowMask, source.width, source.height, true)
+        val fullMask = Bitmap.createScaledBitmap(lowMask, source.width, source.height, true)
+        if (fullMask !== lowMask && !lowMask.isRecycled) lowMask.recycle()
+        return fullMask
     }
 
     override fun close() = interpreter.close()
