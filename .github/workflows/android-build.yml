@@ -63,7 +63,8 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Build ABI-specific debug APKs with bundled neural model
-        run: gradle assembleDebug
+        run: |
+          gradle assembleDebug
           test -s app/build/outputs/apk/debug/app-x86_64-debug.apk
           test -s app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
           ls -lh app/build/outputs/apk/debug/*.apk
