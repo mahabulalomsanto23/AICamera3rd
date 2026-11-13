@@ -41,10 +41,36 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           sha256sum "$APK"
           stat -c 'APK size: %s bytes' "$APK"
+      - name: Prepare emulator smoke test script
+        run: |
+          mkdir -p .github
+          cat > .github/emulator-smoke.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ROOT="${GITHUB_WORKSPACE:-$PWD}"
+          APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
+          echo "Workspace: $ROOT"
+          echo "APK: $APK"
+          test -s "$APK"
+          adb logcat -c
+          adb install -r "$APK"
+          adb shell pm grant com.aicamera.pro android.permission.CAMERA
+          adb shell am start -W -n com.aicamera.pro/.MainActivity
+          sleep 90
+          APP_PID="$(adb shell pidof com.aicamera.pro | tr -d '\\r')"
+          adb logcat -d -v time > "$ROOT/emulator-logcat.txt"
+          {
+            echo "install_status=0"
+            echo "start_status=0"
+            echo "app_pid=$APP_PID"
+            adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true
+          } > "$ROOT/emulator-smoke-summary.txt"
+          test -n "$APP_PID"
+          echo "App remained running for 90 seconds on the cloud Android emulator."
+          SCRIPT
+          chmod +x .github/emulator-smoke.sh
       - name: Run app startup smoke test on cloud Android emulator
         uses: reactivecircus/android-emulator-runner@v2
-        env:
-          DIAG_DIR: ${{ github.workspace }}
         with:
           api-level: 35
           target: google_apis
@@ -52,36 +78,7 @@ jobs:
           profile: pixel_2
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 4096
           disable-animations: true
-          script: |
-            set +e
-            APK="$DIAG_DIR/app/build/outputs/apk/debug/app-debug.apk"
-            echo "APK=$APK"
-            ls -lh "$APK" || true
-            test -f "$APK" || { echo "APK not found at expected workspace path."; exit 2; }
-            adb logcat -c
-            adb install -r "$APK"
-            INSTALL_STATUS=$?
-            START_STATUS=1
-            APP_PID=""
-            if [ "$INSTALL_STATUS" -eq 0 ]; then
-              adb shell pm grant com.aicamera.pro android.permission.CAMERA
-              adb shell am start -W -n com.aicamera.pro/.MainActivity
-              START_STATUS=$?
-              sleep 90
-              APP_PID=$(adb shell pidof com.aicamera.pro | tr -d '\\r')
-            fi
-            adb logcat -d -v time > "$DIAG_DIR/emulator-logcat.txt"
-            {
-              echo "install_status=$INSTALL_STATUS"
-              echo "start_status=$START_STATUS"
-              echo "app_pid=$APP_PID"
-              adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true
-            } > "$DIAG_DIR/emulator-smoke-summary.txt"
-            if [ "$INSTALL_STATUS" -ne 0 ] || [ "$START_STATUS" -ne 0 ] || [ -z "$APP_PID" ]; then
-              echo "Android emulator startup smoke test failed."
-              exit 1
-            fi
-            echo "App remained running for 90 seconds on the cloud Android emulator."
+          script: bash "$GITHUB_WORKSPACE/.github/emulator-smoke.sh"
       - name: Upload emulator diagnostics
         if: always()
         uses: actions/upload-artifact@v4
