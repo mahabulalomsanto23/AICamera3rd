@@ -12,6 +12,15 @@ android {
         versionCode = 13
         versionName = "1.6.5"
     }
+    // Build device-specific APKs: x86_64 for CI emulator, arm64-v8a for OnePlus 8.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
+        }
+    }
     androidResources { noCompress += "tflite" }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -28,7 +37,6 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("org.tensorflow:tensorflow-lite:2.15.0")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.15.0")
     implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.15.0")
     // Bundled on-device face detector; no first-run model download or photo upload.
     implementation("com.google.mlkit:face-detection:16.1.7")
