@@ -44,7 +44,6 @@ jobs:
       - name: Run app startup smoke test on cloud Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
-          APK_PATH: ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk
           DIAG_DIR: ${{ github.workspace }}
         with:
           api-level: 35
@@ -55,26 +54,21 @@ jobs:
           disable-animations: true
           script: |
             set +e
-            APK="$APK_PATH"
-            echo "APK_PATH=$APK"
-            echo "DIAG_DIR=$DIAG_DIR"
+            APK="$DIAG_DIR/app/build/outputs/apk/debug/app-debug.apk"
+            echo "APK=$APK"
             ls -lh "$APK" || true
-            if [ -z "$APK" ] || [ ! -f "$APK" ]; then
-              echo "APK path is not visible to emulator test step."
-              exit 2
-            fi
+            test -f "$APK" || { echo "APK not found at expected workspace path."; exit 2; }
             adb logcat -c
             adb install -r "$APK"
             INSTALL_STATUS=$?
+            START_STATUS=1
+            APP_PID=""
             if [ "$INSTALL_STATUS" -eq 0 ]; then
               adb shell pm grant com.aicamera.pro android.permission.CAMERA
               adb shell am start -W -n com.aicamera.pro/.MainActivity
               START_STATUS=$?
               sleep 90
-              APP_PID=$(adb shell pidof com.aicamera.pro | tr -d '\r')
-            else
-              START_STATUS=1
-              APP_PID=""
+              APP_PID=$(adb shell pidof com.aicamera.pro | tr -d '\\r')
             fi
             adb logcat -d -v time > "$DIAG_DIR/emulator-logcat.txt"
             {
