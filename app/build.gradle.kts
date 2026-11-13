@@ -9,8 +9,8 @@ android {
         applicationId = "com.aicamera.pro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.6.3"
+        versionCode = 12
+        versionName = "1.6.4"
     }
     androidResources { noCompress += "tflite" }
     compileOptions {
