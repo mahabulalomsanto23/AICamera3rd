@@ -33,7 +33,7 @@ jobs:
         run: gradle assembleDebug
       - name: Verify APK signature and archive integrity
         run: |
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
           zip -T "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           test -n "$APKSIGNER"
@@ -65,13 +65,13 @@ jobs:
               START_STATUS=1
               APP_PID=""
             fi
-            adb logcat -d -v time > emulator-logcat.txt
+            adb logcat -d -v time > "$GITHUB_WORKSPACE/emulator-logcat.txt"
             {
               echo "install_status=$INSTALL_STATUS"
               echo "start_status=$START_STATUS"
               echo "app_pid=$APP_PID"
               adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true
-            } > emulator-smoke-summary.txt
+            } > "$GITHUB_WORKSPACE/emulator-smoke-summary.txt"
             if [ "$INSTALL_STATUS" -ne 0 ] || [ "$START_STATUS" -ne 0 ] || [ -z "$APP_PID" ]; then
               echo "Android emulator startup smoke test failed."
               exit 1
@@ -83,8 +83,8 @@ jobs:
         with:
           name: android-emulator-diagnostics
           path: |
-            emulator-logcat.txt
-            emulator-smoke-summary.txt
+            ${{ github.workspace }}/emulator-logcat.txt
+            ${{ github.workspace }}/emulator-smoke-summary.txt
           if-no-files-found: ignore
       - name: Name APK with Bangladesh time
         id: apk
