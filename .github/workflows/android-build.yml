@@ -16,12 +16,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Download and convert MAXIM FiveK neural model
+      - name: Fast Python pre-check
+        run: python -m py_compile tools/*.py
+      - name: Restore validated offline AI model cache
+        id: ai-model-cache
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/assets
+          key: aicamera3rd-ai-models-v1-${{ hashFiles('tools/convert_maxim_fivek.py', 'tools/download_extra_models.py') }}
+      - name: Download and convert models (cache miss only)
+        if: steps.ai-model-cache.outputs.cache-hit != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install tensorflow-cpu==2.15.1 huggingface_hub==0.26.5
           python tools/convert_maxim_fivek.py
           python tools/download_extra_models.py
+      - name: Validate offline model bundle
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          models = [
+              Path("app/src/main/assets/maxim_fivek_fp16.tflite"),
+              Path("app/src/main/assets/nafnet_sidd_width32_fp16.tflite"),
+              Path("app/src/main/assets/deeplabv3_ade20k.tflite"),
+          ]
+          for model in models:
+              if not model.is_file() or model.stat().st_size < 1024 * 1024:
+                  raise SystemExit(f"Missing or unexpectedly small model: {model}")
+              with model.open("rb") as stream:
+                  header = stream.read(8)
+              if header[4:8] != b"TFL3":
+                  raise SystemExit(f"Invalid TFLite FlatBuffer header: {model}")
+              print(f"OK {model}: {model.stat().st_size:,} bytes")
+          PY
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -46,38 +73,81 @@ jobs:
           mkdir -p .github
           cat > .github/emulator-smoke.sh <<'SCRIPT'
           #!/usr/bin/env bash
-          set -euo pipefail
+          set -Eeuo pipefail
           ROOT="${GITHUB_WORKSPACE:-$PWD}"
           APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
+          STAGE="initialize"
+          APP_PID=""
+
+          capture_diagnostics() {
+            local rc=$?
+            trap - EXIT
+            set +e
+            adb logcat -d -v time > "$ROOT/emulator-logcat.txt" 2>&1
+            {
+              echo "exit_code=$rc"
+              echo "failed_stage=$STAGE"
+              echo "app_pid_at_exit=${APP_PID:-none}"
+              echo "current_app_pid=$(adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r')"
+              echo "boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              adb shell dumpsys activity activities 2>&1 | grep -E "mResumedActivity|topResumedActivity" || true
+            } > "$ROOT/emulator-smoke-summary.txt"
+            exit "$rc"
+          }
+          trap capture_diagnostics EXIT
+
+          STAGE="verify-apk"
           echo "Workspace: $ROOT"
           echo "APK: $APK"
           test -s "$APK"
+
+          STAGE="wait-for-emulator"
+          adb wait-for-device
+          BOOTED=""
+          for attempt in $(seq 1 60); do
+            BOOTED="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            [[ "$BOOTED" == "1" ]] && break
+            sleep 2
+          done
+          test "$BOOTED" = "1"
+
+          STAGE="clear-logcat"
           adb logcat -c
+          STAGE="install-apk"
           adb install -r "$APK"
+
+          STAGE="grant-camera-permission"
           adb shell pm grant com.aicamera.pro android.permission.CAMERA
+
+          STAGE="launch-main-activity"
           adb shell am start -W -n com.aicamera.pro/.MainActivity
-          sleep 90
-          APP_PID="$(adb shell pidof com.aicamera.pro | tr -d '\\r')"
-          adb logcat -d -v time > "$ROOT/emulator-logcat.txt"
-          {
-            echo "install_status=0"
-            echo "start_status=0"
-            echo "app_pid=$APP_PID"
-            adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true
-          } > "$ROOT/emulator-smoke-summary.txt"
+
+          STAGE="wait-for-app-process"
+          for attempt in $(seq 1 15); do
+            APP_PID="$(adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
+            [[ -n "$APP_PID" ]] && break
+            sleep 2
+          done
           test -n "$APP_PID"
-          echo "App remained running for 90 seconds on the cloud Android emulator."
+
+          STAGE="stability-check-30s"
+          sleep 30
+          APP_PID_AFTER="$(adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
+          test -n "$APP_PID_AFTER"
+          echo "App remained running for 30 seconds on the cloud Android emulator."
+          STAGE="completed"
           SCRIPT
           chmod +x .github/emulator-smoke.sh
       - name: Run app startup smoke test on cloud Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 33
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 4096
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 4096 -no-snapshot
           disable-animations: true
+          emulator-boot-timeout: 600
           script: bash "$GITHUB_WORKSPACE/.github/emulator-smoke.sh"
       - name: Upload emulator diagnostics
         if: always()
