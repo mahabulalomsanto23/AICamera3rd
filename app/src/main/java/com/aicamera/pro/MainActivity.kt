@@ -199,12 +199,6 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.BLACK)
         }
         root.addView(preview, android.widget.FrameLayout.LayoutParams(-1, -1))
-        root.post {
-            val frameWidth = root.width
-            if (frameWidth > 0) {
-                preview.layoutParams = android.widget.FrameLayout.LayoutParams(frameWidth, (frameWidth * 3f / 4f).toInt(), Gravity.CENTER)
-            }
-        }
 
         // Minimal camera-style top bar: brand at left, compact processing status at right.
         val topBar = LinearLayout(this).apply {
@@ -372,6 +366,25 @@ class MainActivity : AppCompatActivity() {
         })
 
         root.addView(bottomPanel, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+
+        // Match the stock camera's tall central viewfinder without going edge-to-edge:
+        // keep the top status bar and bottom shooting controls outside the preview.
+        root.post {
+            val availableWidth = root.width
+            val topReserved = topBar.height
+            val bottomReserved = bottomPanel.height
+            val previewHeight = root.height - topReserved - bottomReserved - dp(16)
+            if (availableWidth > 0 && previewHeight > 0) {
+                preview.layoutParams = android.widget.FrameLayout.LayoutParams(
+                    availableWidth,
+                    previewHeight,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                ).apply {
+                    topMargin = topReserved + dp(8)
+                }
+            }
+        }
+
         setContentView(root)
         updateModeUi()
     }
