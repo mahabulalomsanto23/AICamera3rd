@@ -9,5 +9,10 @@
                 <action android:name="com.aicamera.pro.RUN_BENCHMARK" />
             </intent-filter>
         </receiver>
+        <activity
+            android:name=".BenchmarkActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>
