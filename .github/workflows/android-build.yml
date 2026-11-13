@@ -124,7 +124,7 @@ jobs:
           STAGE="clear-logcat"
           timeout 10s adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear timed out or failed; continuing with tag-filtered diagnostics."
           STAGE="install-apk"
-          timeout 300s adb install -r "$APK"
+          timeout 900s adb install --no-streaming -r "$APK"
 
           STAGE="grant-camera-permission"
           timeout 15s adb shell pm grant com.aicamera.pro android.permission.CAMERA
@@ -220,7 +220,7 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 4096 -no-snapshot
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -cores 4 -memory 6144 -no-snapshot
           disable-animations: true
           emulator-boot-timeout: 600
           script: bash "$GITHUB_WORKSPACE/.github/emulator-smoke.sh"
