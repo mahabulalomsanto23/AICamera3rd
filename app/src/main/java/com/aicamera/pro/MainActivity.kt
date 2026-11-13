@@ -66,13 +66,17 @@ class MainActivity : AppCompatActivity() {
     private val picker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@registerForActivityResult
         val selectedMode = mode
-        setBusy(true, "Opening selected photo…")
+        setBusy(true, "Preparing photo for background processing…")
         processingExecutor.execute {
+            val input = File(cacheDir, "import_${System.currentTimeMillis()}.img")
             try {
-                val bitmap = decodeGalleryImage(uri)
-                processGalleryForPreview(bitmap, selectedMode)
+                contentResolver.openInputStream(uri)?.use { source ->
+                    input.outputStream().use { target -> source.copyTo(target) }
+                } ?: throw IOException("Could not read selected photo")
+                startBackgroundProcessing(input, selectedMode)
             } catch (e: Exception) {
-                showFailure("Photo processing failed: ${e.message ?: e.javaClass.simpleName}")
+                input.delete()
+                showFailure("Could not start photo processing: ${e.message ?: e.javaClass.simpleName}")
             }
         }
     }
@@ -452,6 +456,24 @@ class MainActivity : AppCompatActivity() {
         startCamera()
     }
 
+    private fun startBackgroundProcessing(input: File, selectedMode: ColorEnhancer.Mode) {
+        try {
+            val serviceIntent = Intent(this, ImageProcessingService::class.java).apply {
+                putExtra(ImageProcessingService.EXTRA_INPUT, input.absolutePath)
+                putExtra(ImageProcessingService.EXTRA_MODE, selectedMode.name)
+                putExtra(ImageProcessingService.EXTRA_STRENGTH, portraitStrength)
+            }
+            androidx.core.content.ContextCompat.startForegroundService(this, serviceIntent)
+            runOnUiThread {
+                setBusy(false, "PROCESSING IN BACKGROUND • CHECK NOTIFICATION")
+                toast("Photo processing started. You can minimize the app or lock the screen; it will save to Gallery when finished.")
+            }
+        } catch (e: Exception) {
+            input.delete()
+            showFailure("Could not start background processing: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
     private fun takePhoto() {
         if (busy) return
         val imageCapture = capture
@@ -472,16 +494,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                processingExecutor.execute {
-                    try {
-                        val bitmap = decodeCapturedImage(output)
-                        processAndSave(bitmap, selectedMode)
-                    } catch (e: Exception) {
-                        showFailure("Enhancement failed: ${e.message ?: e.javaClass.simpleName}")
-                    } finally {
-                        output.delete()
-                    }
-                }
+                startBackgroundProcessing(output, selectedMode)
             }
         })
     }
