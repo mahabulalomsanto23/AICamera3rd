@@ -118,7 +118,7 @@ jobs:
           test "$BOOTED" = "1"
 
           STAGE="clear-logcat"
-          adb logcat -c
+          adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
           STAGE="install-apk"
           adb install -r "$APK"
 
@@ -144,18 +144,19 @@ jobs:
           echo "App remained running for 30 seconds on the cloud Android emulator."
 
           STAGE="ai-processing-benchmark"
-          adb logcat -c
+          adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
           TEST_INPUT="$ROOT/testdata/aicamera3rd-test-photo.jpg"
           test -s "$TEST_INPUT"
           file "$TEST_INPUT"
+          sha256sum "$TEST_INPUT" | tee "$ROOT/test-input-photo.sha256"
+          cp "$TEST_INPUT" "$ROOT/test-input-photo.jpg"
           DEVICE_INPUT="/sdcard/Android/data/com.aicamera.pro/files/aicamera3rd-test-photo.jpg"
           adb shell mkdir -p "/sdcard/Android/data/com.aicamera.pro/files"
           adb push "$TEST_INPUT" "$DEVICE_INPUT"
           adb shell test -s "$DEVICE_INPUT"
-          adb logcat -c
+          adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
           echo "Starting AI processing on the supplied 512x378 photo…"
-          adb shell am broadcast -n com.aicamera.pro/.BenchmarkReceiver \
-            -a com.aicamera.pro.RUN_BENCHMARK \
+          adb shell am start-foreground-service -n com.aicamera.pro/.ImageProcessingService \
             --es com.aicamera.pro.extra.INPUT "$DEVICE_INPUT" \
             --es com.aicamera.pro.extra.MODE AI \
             --ez com.aicamera.pro.extra.BENCHMARK true
@@ -169,9 +170,12 @@ jobs:
             sleep 2
           done
           adb logcat -d -v time -s AICameraProcessing:I AICameraProcessing:E > "$ROOT/ai-benchmark-logcat.txt" 2>&1 || true
+          adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
           if [[ "$BENCHMARK_DONE" != "yes" ]]; then
             echo "AI benchmark did not finish within 30 minutes." | tee "$ROOT/ai-benchmark.txt"
             adb shell pidof com.aicamera.pro || true
+            adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
+            adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
             exit 1
           fi
           cat "$ROOT/ai-benchmark.txt"
@@ -216,6 +220,10 @@ jobs:
             ${{ github.workspace }}/emulator-smoke-summary.txt
             ${{ github.workspace }}/ai-benchmark.txt
             ${{ github.workspace }}/ai-benchmark-logcat.txt
+            ${{ github.workspace }}/ai-benchmark-full-logcat.txt
+            ${{ github.workspace }}/ai-service-state.txt
+            ${{ github.workspace }}/test-input-photo.jpg
+            ${{ github.workspace }}/test-input-photo.sha256
             ${{ github.workspace }}/processed-test-photo.jpg
             ${{ github.workspace }}/processed-test-photo.jpg.sha256
           if-no-files-found: ignore
