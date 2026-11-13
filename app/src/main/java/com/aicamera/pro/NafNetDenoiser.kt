@@ -4,8 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import java.io.File
-import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
@@ -16,16 +14,10 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
     private val interpreter: Interpreter
 
     init {
-        val file = File(context.filesDir, "nafnet_sidd_width32_fp16.tflite")
-        if (!file.exists() || file.length() == 0L) {
-            context.assets.open("nafnet_sidd_width32_fp16.tflite").use { input ->
-                FileOutputStream(file).use { input.copyTo(it) }
-            }
-        }
-        // Use the CPU backend for device compatibility. Creating the Adreno GPU
-        // delegate during initialization can terminate some vendor-driver processes
-        // with a native signal that Java exception handlers cannot catch.
-        interpreter = Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
+        // Use the CPU backend for device compatibility. Map the bundled model
+        // directly instead of copying it to internal storage on first use.
+        val modelBuffer = ModelAsset.map(context, "nafnet_sidd_width32_fp16.tflite")
+        interpreter = Interpreter(modelBuffer, Interpreter.Options().apply { setNumThreads(4) })
         require(interpreter.getInputTensor(0).shape().contentEquals(intArrayOf(1, 3, 256, 256))) {
             "Unexpected NAFNet input: ${interpreter.getInputTensor(0).shape().contentToString()}"
         }

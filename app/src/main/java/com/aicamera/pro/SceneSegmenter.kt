@@ -5,8 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import java.io.File
-import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
@@ -25,13 +23,8 @@ class SceneSegmenter(context: Context) : AutoCloseable {
     private val classes: Int
 
     init {
-        val file = File(context.filesDir, "deeplabv3_ade20k.tflite")
-        if (!file.exists() || file.length() == 0L) {
-            context.assets.open("deeplabv3_ade20k.tflite").use { input ->
-                FileOutputStream(file).use { input.copyTo(it) }
-            }
-        }
-        interpreter = Interpreter(file, Interpreter.Options().apply { setNumThreads(4) })
+        val modelBuffer = ModelAsset.map(context, "deeplabv3_ade20k.tflite")
+        interpreter = Interpreter(modelBuffer, Interpreter.Options().apply { setNumThreads(4) })
         val ins = interpreter.getInputTensor(0).shape()
         val outs = interpreter.getOutputTensor(0).shape()
         require(ins.size == 4 && ins[0] == 1 && ins[3] == 3) { "Unsupported segmentation input: ${ins.contentToString()}" }

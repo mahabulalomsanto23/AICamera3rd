@@ -4,8 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import java.io.File
-import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -20,14 +18,9 @@ class MaximEnhancer(context: Context) : AutoCloseable {
     private var outputIndex: Int = 0
 
     init {
-        val modelFile = File(context.filesDir, "maxim_fivek_fp16.tflite")
-        if (!modelFile.exists() || modelFile.length() == 0L) {
-            context.assets.open("maxim_fivek_fp16.tflite").use { input ->
-                FileOutputStream(modelFile).use { output -> input.copyTo(output) }
-            }
-        }
+        val modelBuffer = ModelAsset.map(context, "maxim_fivek_fp16.tflite")
         val options = Interpreter.Options().apply { setNumThreads(4) }
-        interpreter = Interpreter(modelFile, options)
+        interpreter = Interpreter(modelBuffer, options)
         val inputShape = interpreter.getInputTensor(0).shape()
         require(inputShape.contentEquals(intArrayOf(1, 256, 256, 3))) {
             "Unexpected MAXIM input shape: ${inputShape.contentToString()}"
