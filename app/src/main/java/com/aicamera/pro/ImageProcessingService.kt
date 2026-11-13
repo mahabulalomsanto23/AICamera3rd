@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import java.io.File
@@ -56,13 +57,15 @@ class ImageProcessingService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification("Preparing photo…", 0, 0, false))
         executor.execute {
             acquireWakeLock()
+            val totalStarted = SystemClock.elapsedRealtime()
+            val benchmark = inputPath == "benchmark://generated"
             var source: Bitmap? = null
             var output: Bitmap? = null
-            val file = File(inputPath)
+            val file = if (benchmark) null else File(inputPath)
             try {
                 val mode = ColorEnhancer.Mode.valueOf(modeName)
-                updateProgress("Opening photo", 0, 0)
-                source = decodeInput(file)
+                updateProgress(if (benchmark) "Creating benchmark photo" else "Opening photo", 0, 0)
+                source = if (benchmark) createBenchmarkBitmap() else decodeInput(file!!)
                 output = when (mode) {
                     ColorEnhancer.Mode.VIVID -> {
                         updateProgress("Enhancing vivid colors", 0, 0)
@@ -76,17 +79,22 @@ class ImageProcessingService : Service() {
                     }
                     ColorEnhancer.Mode.AI -> processAi(source)
                 }
+                val saveStarted = SystemClock.elapsedRealtime()
                 updateProgress("Saving to Gallery", 0, 0)
                 val uri = saveBitmap(output)
+                val saveMs = SystemClock.elapsedRealtime() - saveStarted
+                val totalMs = SystemClock.elapsedRealtime() - totalStarted
                 notifyFinished(true, "Photo saved to Pictures/AICamera3rd")
                 android.util.Log.i(TAG, "Processing complete: $uri")
+                if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName width=${source.width} height=${source.height} save_ms=$saveMs total_ms=$totalMs")
             } catch (t: Throwable) {
                 android.util.Log.e(TAG, "Image processing failed", t)
+                if (benchmark) android.util.Log.e(TAG, "BENCHMARK_RESULT status=failure elapsed_ms=${SystemClock.elapsedRealtime() - totalStarted} error=${t.javaClass.simpleName}: ${t.message}")
                 notifyFinished(false, t.message ?: t.javaClass.simpleName)
             } finally {
                 if (output != null && output !== source && !output.isRecycled) output.recycle()
                 if (source != null && !source.isRecycled) source.recycle()
-                file.delete()
+                file?.delete()
                 closeModels()
                 releaseWakeLock()
                 if (stopSelfResult(startId)) {
@@ -98,21 +106,28 @@ class ImageProcessingService : Service() {
     }
 
     private fun processAi(source: Bitmap): Bitmap {
+        val loadStarted = SystemClock.elapsedRealtime()
         updateProgress("Loading offline AI models", 0, 0)
         maxim = MaximEnhancer(this)
         denoiser = NafNetDenoiser(this)
+        android.util.Log.i(TAG, "BENCHMARK_STAGE model_load_ms=${SystemClock.elapsedRealtime() - loadStarted}")
+        val denoiseStarted = SystemClock.elapsedRealtime()
         updateProgress("Denoising details", 0, 0)
         val denoised = denoiser!!.denoise(source) { done, total ->
             if (done == 1 || done == total || done % 2 == 0) {
                 updateProgress("Denoising details", done, total)
             }
         }
+        android.util.Log.i(TAG, "BENCHMARK_STAGE denoise_ms=${SystemClock.elapsedRealtime() - denoiseStarted}")
         try {
+            val enhanceStarted = SystemClock.elapsedRealtime()
             updateProgress("Enhancing colors", 0, 0)
             val enhanced = maxim!!.enhance(denoised)
+            android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
             if (!denoised.isRecycled) denoised.recycle()
             var sceneResult: Bitmap? = null
             try {
+                val refineStarted = SystemClock.elapsedRealtime()
                 updateProgress("Refining scene and face details", 0, 0)
                 scene = try { SceneSegmenter(this) } catch (e: Exception) {
                     android.util.Log.w(TAG, "Optional scene segmentation unavailable", e)
@@ -124,6 +139,7 @@ class ImageProcessingService : Service() {
                 }
                 sceneResult = scene?.apply(source, enhanced) ?: enhanced
                 val final = faces?.protect(source, sceneResult) ?: sceneResult
+                android.util.Log.i(TAG, "BENCHMARK_STAGE scene_face_refine_ms=${SystemClock.elapsedRealtime() - refineStarted}")
                 if (sceneResult !== final && sceneResult !== enhanced && !sceneResult.isRecycled) sceneResult.recycle()
                 if (enhanced !== final && !enhanced.isRecycled) enhanced.recycle()
                 return final
@@ -135,6 +151,28 @@ class ImageProcessingService : Service() {
         } finally {
             if (!denoised.isRecycled) denoised.recycle()
         }
+    }
+
+    /**
+     * Deterministic 1600x1200 synthetic textured photo for CI performance tests.
+     * It exercises the exact offline AI pipeline without requiring a user photo.
+     */
+    private fun createBenchmarkBitmap(): Bitmap {
+        val width = 1600
+        val height = 1200
+        val pixels = IntArray(width * height)
+        var state = 0x13579BDF
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                state = state * 1664525 + 1013904223
+                val noise = (state ushr 24) and 0x3F
+                val r = ((x * 255 / width) + noise).coerceIn(0, 255)
+                val g = ((y * 220 / height) + noise / 2).coerceIn(0, 255)
+                val b = (((x + y) * 180 / (width + height)) + noise).coerceIn(0, 255)
+                pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+        }
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
 
     private fun decodeInput(file: File): Bitmap {
