@@ -161,29 +161,35 @@ jobs:
           timeout 60s adb push "$TEST_INPUT" "$DEVICE_INPUT"
           timeout 10s adb shell test -s "$DEVICE_INPUT"
           adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
-          echo "Starting AI processing on the supplied 512x378 photo…"
-          timeout 15s adb shell am broadcast -n com.aicamera.pro/.BenchmarkReceiver \
-            -a com.aicamera.pro.RUN_BENCHMARK \
+          echo "Starting AI processing on the supplied photo through the foreground service…"
+          timeout 90s adb shell am start-foreground-service -n com.aicamera.pro/.ImageProcessingService \
             --es com.aicamera.pro.extra.INPUT "$DEVICE_INPUT" \
-            --es com.aicamera.pro.extra.MODE AI
+            --es com.aicamera.pro.extra.MODE AI \
+            --ez com.aicamera.pro.extra.BENCHMARK true
           timeout 10s adb shell input keyevent 3 || true
-          echo "Sent HOME after service launch to verify background processing."
+          echo "Sent HOME after foreground service launch to verify background processing."
           BENCHMARK_DONE=""
+          adb logcat -v time -s AICameraProcessing:I AICameraProcessing:E > "$ROOT/ai-benchmark-logcat.txt" 2>&1 &
+          LOGCAT_PID=$!
           for attempt in $(seq 1 900); do
-            timeout 10s adb logcat -d -s AICameraProcessing:I AICameraProcessing:E 2>/dev/null | grep -E "BENCHMARK_RESULT" > "$ROOT/ai-benchmark.txt" || true
+            grep -E "BENCHMARK_RESULT" "$ROOT/ai-benchmark-logcat.txt" > "$ROOT/ai-benchmark.txt" || true
             if grep -q "BENCHMARK_RESULT" "$ROOT/ai-benchmark.txt"; then
               BENCHMARK_DONE="yes"
               break
             fi
             if ! timeout 10s adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' | grep -q '[0-9]'; then
               echo "App process exited before the AI benchmark result was logged." | tee "$ROOT/ai-benchmark.txt"
-              timeout 15s timeout 15s adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
-              timeout 15s timeout 15s adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
+              kill "$LOGCAT_PID" 2>/dev/null || true
+              wait "$LOGCAT_PID" 2>/dev/null || true
+              timeout 15s adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
+              timeout 15s adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
               exit 1
             fi
             sleep 2
           done
-          timeout 15s adb logcat -d -v time -s AICameraProcessing:I AICameraProcessing:E > "$ROOT/ai-benchmark-logcat.txt" 2>&1 || true
+          kill "$LOGCAT_PID" 2>/dev/null || true
+          wait "$LOGCAT_PID" 2>/dev/null || true
+          grep -E "BENCHMARK_RESULT" "$ROOT/ai-benchmark-logcat.txt" > "$ROOT/ai-benchmark.txt" || true
           adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
           if [[ "$BENCHMARK_DONE" != "yes" ]]; then
             echo "AI benchmark did not finish within 30 minutes." | tee "$ROOT/ai-benchmark.txt"
@@ -214,6 +220,7 @@ jobs:
           SCRIPT
           chmod +x .github/emulator-smoke.sh
       - name: Run app startup smoke test on cloud Android emulator
+        timeout-minutes: 45
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33
