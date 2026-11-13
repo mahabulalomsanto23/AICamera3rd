@@ -43,6 +43,9 @@ jobs:
           stat -c 'APK size: %s bytes' "$APK"
       - name: Run app startup smoke test on cloud Android emulator
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          APK_PATH: ${{ github.workspace }}/app/build/outputs/apk/debug/app-debug.apk
+          DIAG_DIR: ${{ github.workspace }}
         with:
           api-level: 35
           target: google_apis
@@ -52,14 +55,12 @@ jobs:
           disable-animations: true
           script: |
             set +e
-            APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-debug.apk"
-            if [ ! -f "$APK" ]; then
-              echo "Expected APK missing; searching build outputs..."
-              APK=$(find "$GITHUB_WORKSPACE/app/build/outputs/apk" -type f -name '*.apk' | head -n 1)
-            fi
-            echo "APK selected: $APK"
+            APK="$APK_PATH"
+            echo "APK_PATH=$APK"
+            echo "DIAG_DIR=$DIAG_DIR"
+            ls -lh "$APK" || true
             if [ -z "$APK" ] || [ ! -f "$APK" ]; then
-              echo "No APK found under $GITHUB_WORKSPACE/app/build/outputs/apk"
+              echo "APK path is not visible to emulator test step."
               exit 2
             fi
             adb logcat -c
@@ -75,13 +76,13 @@ jobs:
               START_STATUS=1
               APP_PID=""
             fi
-            adb logcat -d -v time > "$GITHUB_WORKSPACE/emulator-logcat.txt"
+            adb logcat -d -v time > "$DIAG_DIR/emulator-logcat.txt"
             {
               echo "install_status=$INSTALL_STATUS"
               echo "start_status=$START_STATUS"
               echo "app_pid=$APP_PID"
               adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true
-            } > "$GITHUB_WORKSPACE/emulator-smoke-summary.txt"
+            } > "$DIAG_DIR/emulator-smoke-summary.txt"
             if [ "$INSTALL_STATUS" -ne 0 ] || [ "$START_STATUS" -ne 0 ] || [ -z "$APP_PID" ]; then
               echo "Android emulator startup smoke test failed."
               exit 1
