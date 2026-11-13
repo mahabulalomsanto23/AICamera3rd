@@ -58,14 +58,15 @@ class ImageProcessingService : Service() {
         executor.execute {
             acquireWakeLock()
             val totalStarted = SystemClock.elapsedRealtime()
-            val benchmark = inputPath == "benchmark://generated"
+            val generatedBenchmark = inputPath == "benchmark://generated"
+            val benchmark = intent?.getBooleanExtra(EXTRA_BENCHMARK, generatedBenchmark) ?: generatedBenchmark
             var source: Bitmap? = null
             var output: Bitmap? = null
-            val file = if (benchmark) null else File(inputPath)
+            val file = if (generatedBenchmark) null else File(inputPath)
             try {
                 val mode = ColorEnhancer.Mode.valueOf(modeName)
-                updateProgress(if (benchmark) "Creating benchmark photo" else "Opening photo", 0, 0)
-                source = if (benchmark) createBenchmarkBitmap() else decodeInput(file!!)
+                updateProgress(if (generatedBenchmark) "Creating benchmark photo" else "Opening photo", 0, 0)
+                source = if (generatedBenchmark) createBenchmarkBitmap() else decodeInput(file!!)
                 output = when (mode) {
                     ColorEnhancer.Mode.VIVID -> {
                         updateProgress("Enhancing vivid colors", 0, 0)
@@ -86,7 +87,7 @@ class ImageProcessingService : Service() {
                 val totalMs = SystemClock.elapsedRealtime() - totalStarted
                 notifyFinished(true, "Photo saved to Pictures/AICamera3rd")
                 android.util.Log.i(TAG, "Processing complete: $uri")
-                if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName width=${source.width} height=${source.height} save_ms=$saveMs total_ms=$totalMs")
+                if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName input=${if (generatedBenchmark) "synthetic" else "photo"} width=${source.width} height=${source.height} save_ms=$saveMs total_ms=$totalMs output=${uri.lastPathSegment}")
             } catch (t: Throwable) {
                 android.util.Log.e(TAG, "Image processing failed", t)
                 if (benchmark) android.util.Log.e(TAG, "BENCHMARK_RESULT status=failure elapsed_ms=${SystemClock.elapsedRealtime() - totalStarted} error=${t.javaClass.simpleName}: ${t.message}")
@@ -303,6 +304,7 @@ class ImageProcessingService : Service() {
         const val EXTRA_INPUT = "com.aicamera.pro.extra.INPUT"
         const val EXTRA_MODE = "com.aicamera.pro.extra.MODE"
         const val EXTRA_STRENGTH = "com.aicamera.pro.extra.STRENGTH"
+        const val EXTRA_BENCHMARK = "com.aicamera.pro.extra.BENCHMARK"
         private const val TAG = "AICameraProcessing"
         private const val CHANNEL_ID = "ai_photo_processing"
         private const val NOTIFICATION_ID = 4101
