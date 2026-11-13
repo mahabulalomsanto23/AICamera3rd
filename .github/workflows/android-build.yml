@@ -20,7 +20,7 @@ jobs:
         run: python -m py_compile tools/*.py
       - name: Restore validated offline AI model cache
         id: ai-model-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: app/src/main/assets
           key: aicamera3rd-ai-models-v1-${{ hashFiles('tools/convert_maxim_fivek.py', 'tools/download_extra_models.py') }}
@@ -49,6 +49,12 @@ jobs:
                   raise SystemExit(f"Invalid TFLite FlatBuffer header: {model}")
               print(f"OK {model}: {model.stat().st_size:,} bytes")
           PY
+      - name: Save verified offline AI model cache
+        if: steps.ai-model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/src/main/assets
+          key: aicamera3rd-ai-models-v1-${{ hashFiles('tools/convert_maxim_fivek.py', 'tools/download_extra_models.py') }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
