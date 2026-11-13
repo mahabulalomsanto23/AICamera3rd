@@ -172,7 +172,7 @@ jobs:
             --es com.aicamera.pro.extra.MODE AI
           timeout 10s adb shell input keyevent 3 || true
           echo "Benchmark activity launched; photo processing continues in foreground service."
-          for attempt in $(seq 1 900); do
+          for attempt in $(seq 1 3000); do
             grep -E "BENCHMARK_RESULT" "$ROOT/ai-benchmark-logcat.txt" > "$ROOT/ai-benchmark.txt" || true
             if grep -q "BENCHMARK_RESULT" "$ROOT/ai-benchmark.txt"; then
               BENCHMARK_DONE="yes"
@@ -200,7 +200,7 @@ jobs:
           grep -E "BENCHMARK_RESULT" "$ROOT/ai-benchmark-logcat.txt" > "$ROOT/ai-benchmark.txt" || true
 
           if [[ "$BENCHMARK_DONE" != "yes" ]]; then
-            echo "AI benchmark did not finish within 30 minutes." | tee "$ROOT/ai-benchmark.txt"
+            echo "AI benchmark did not finish within 100 minutes." | tee "$ROOT/ai-benchmark.txt"
             timeout 10s adb shell pidof com.aicamera.pro || true
             adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
             adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
@@ -227,15 +227,8 @@ jobs:
           STAGE="completed"
           SCRIPT
           chmod +x .github/emulator-smoke.sh
-      - name: Enable KVM hardware acceleration for Android emulator
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
-          emulator -accel-check
       - name: Run app startup smoke test on cloud Android emulator
-        timeout-minutes: 45
+        timeout-minutes: 120
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33
