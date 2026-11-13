@@ -89,14 +89,14 @@ jobs:
             local rc=$?
             trap - EXIT
             set +e
-            adb logcat -d -v time > "$ROOT/emulator-logcat.txt" 2>&1
+            timeout 15s adb logcat -d -v time > "$ROOT/emulator-logcat.txt" 2>&1 || true
             {
               echo "exit_code=$rc"
               echo "failed_stage=$STAGE"
               echo "app_pid_at_exit=${APP_PID:-none}"
-              echo "current_app_pid=$(adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r')"
-              echo "boot_completed=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-              adb shell dumpsys activity activities 2>&1 | grep -E "mResumedActivity|topResumedActivity" || true
+              echo "current_app_pid=$(timeout 10s adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
+              echo "boot_completed=$(timeout 10s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+              timeout 15s adb shell dumpsys activity activities 2>&1 | grep -E "mResumedActivity|topResumedActivity" || true
             } > "$ROOT/emulator-smoke-summary.txt"
             exit "$rc"
           }
@@ -108,30 +108,30 @@ jobs:
           test -s "$APK"
 
           STAGE="wait-for-emulator"
-          adb wait-for-device
+          timeout 120s adb wait-for-device
           BOOTED=""
           for attempt in $(seq 1 60); do
-            BOOTED="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            BOOTED="$(timeout 10s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
             [[ "$BOOTED" == "1" ]] && break
             sleep 2
           done
           test "$BOOTED" = "1"
 
           STAGE="clear-logcat"
-          adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
+          timeout 10s adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear timed out or failed; continuing with tag-filtered diagnostics."
           STAGE="install-apk"
-          adb install -r "$APK"
+          timeout 120s adb install -r "$APK"
 
           STAGE="grant-camera-permission"
-          adb shell pm grant com.aicamera.pro android.permission.CAMERA
-          adb shell pm grant com.aicamera.pro android.permission.POST_NOTIFICATIONS || true
+          timeout 15s adb shell pm grant com.aicamera.pro android.permission.CAMERA
+          timeout 15s adb shell pm grant com.aicamera.pro android.permission.POST_NOTIFICATIONS || true
 
           STAGE="launch-main-activity"
-          adb shell am start -W -n com.aicamera.pro/.MainActivity
+          timeout 15s adb shell am start -n com.aicamera.pro/.MainActivity
 
           STAGE="wait-for-app-process"
           for attempt in $(seq 1 15); do
-            APP_PID="$(adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
+            APP_PID="$(timeout 10s adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
             [[ -n "$APP_PID" ]] && break
             sleep 2
           done
@@ -139,9 +139,11 @@ jobs:
 
           STAGE="stability-check-30s"
           sleep 30
-          APP_PID_AFTER="$(adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
+          APP_PID_AFTER="$(timeout 10s adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' || true)"
           test -n "$APP_PID_AFTER"
           echo "App remained running for 30 seconds on the cloud Android emulator."
+          timeout 15s adb shell screencap -p /sdcard/aicamera-preview.png || true
+          timeout 30s adb pull /sdcard/aicamera-preview.png "$ROOT/emulator-preview.png" || true
 
           STAGE="ai-processing-benchmark"
           adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
@@ -151,29 +153,37 @@ jobs:
           sha256sum "$TEST_INPUT" | tee "$ROOT/test-input-photo.sha256"
           cp "$TEST_INPUT" "$ROOT/test-input-photo.jpg"
           DEVICE_INPUT="/sdcard/Android/data/com.aicamera.pro/files/aicamera3rd-test-photo.jpg"
-          adb shell mkdir -p "/sdcard/Android/data/com.aicamera.pro/files"
-          adb push "$TEST_INPUT" "$DEVICE_INPUT"
-          adb shell test -s "$DEVICE_INPUT"
+          timeout 10s adb shell mkdir -p "/sdcard/Android/data/com.aicamera.pro/files"
+          timeout 60s adb push "$TEST_INPUT" "$DEVICE_INPUT"
+          timeout 10s adb shell test -s "$DEVICE_INPUT"
           adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
           echo "Starting AI processing on the supplied 512x378 photo…"
-          adb shell am start-foreground-service -n com.aicamera.pro/.ImageProcessingService \
+          timeout 15s adb shell am broadcast -n com.aicamera.pro/.BenchmarkReceiver \
+            -a com.aicamera.pro.RUN_BENCHMARK \
             --es com.aicamera.pro.extra.INPUT "$DEVICE_INPUT" \
-            --es com.aicamera.pro.extra.MODE AI \
-            --ez com.aicamera.pro.extra.BENCHMARK true
+            --es com.aicamera.pro.extra.MODE AI
+          timeout 10s adb shell input keyevent 3 || true
+          echo "Sent HOME after service launch to verify background processing."
           BENCHMARK_DONE=""
           for attempt in $(seq 1 900); do
-            adb logcat -d -s AICameraProcessing:I AICameraProcessing:E 2>/dev/null | grep -E "BENCHMARK_RESULT" > "$ROOT/ai-benchmark.txt" || true
+            timeout 10s adb logcat -d -s AICameraProcessing:I AICameraProcessing:E 2>/dev/null | grep -E "BENCHMARK_RESULT" > "$ROOT/ai-benchmark.txt" || true
             if grep -q "BENCHMARK_RESULT" "$ROOT/ai-benchmark.txt"; then
               BENCHMARK_DONE="yes"
               break
             fi
+            if ! timeout 10s adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' | grep -q '[0-9]'; then
+              echo "App process exited before the AI benchmark result was logged." | tee "$ROOT/ai-benchmark.txt"
+              timeout 15s timeout 15s adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
+              timeout 15s timeout 15s adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
+              exit 1
+            fi
             sleep 2
           done
-          adb logcat -d -v time -s AICameraProcessing:I AICameraProcessing:E > "$ROOT/ai-benchmark-logcat.txt" 2>&1 || true
+          timeout 15s adb logcat -d -v time -s AICameraProcessing:I AICameraProcessing:E > "$ROOT/ai-benchmark-logcat.txt" 2>&1 || true
           adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
           if [[ "$BENCHMARK_DONE" != "yes" ]]; then
             echo "AI benchmark did not finish within 30 minutes." | tee "$ROOT/ai-benchmark.txt"
-            adb shell pidof com.aicamera.pro || true
+            timeout 10s adb shell pidof com.aicamera.pro || true
             adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
             adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
             exit 1
@@ -185,13 +195,13 @@ jobs:
           fi
 
           STAGE="collect-processed-photo"
-          OUTPUT_FILE="$(adb shell 'ls -t /sdcard/Pictures/AICamera3rd/AICamera3rd_*.jpg 2>/dev/null | head -n 1' | tr -d '\r')"
+          OUTPUT_FILE="$(timeout 15s adb shell 'ls -t /sdcard/Pictures/AICamera3rd/AICamera3rd_*.jpg 2>/dev/null | head -n 1' | tr -d '\r')"
           if [[ -z "$OUTPUT_FILE" ]]; then
             echo "Processing log reported success but no Gallery output was found."
-            adb shell find /sdcard/Pictures/AICamera3rd -maxdepth 1 -type f -print || true
+            timeout 15s adb shell find /sdcard/Pictures/AICamera3rd -maxdepth 1 -type f -print || true
             exit 1
           fi
-          adb pull "$OUTPUT_FILE" "$ROOT/processed-test-photo.jpg"
+          timeout 60s adb pull "$OUTPUT_FILE" "$ROOT/processed-test-photo.jpg"
           test -s "$ROOT/processed-test-photo.jpg"
           sha256sum "$ROOT/processed-test-photo.jpg" > "$ROOT/processed-test-photo.jpg.sha256"
           echo "Processed photo collected: $OUTPUT_FILE"
@@ -218,6 +228,7 @@ jobs:
           path: |
             ${{ github.workspace }}/emulator-logcat.txt
             ${{ github.workspace }}/emulator-smoke-summary.txt
+            ${{ github.workspace }}/emulator-preview.png
             ${{ github.workspace }}/ai-benchmark.txt
             ${{ github.workspace }}/ai-benchmark-logcat.txt
             ${{ github.workspace }}/ai-benchmark-full-logcat.txt
