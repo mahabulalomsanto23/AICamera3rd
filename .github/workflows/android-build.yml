@@ -120,7 +120,7 @@ jobs:
           STAGE="clear-logcat"
           timeout 10s adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear timed out or failed; continuing with tag-filtered diagnostics."
           STAGE="install-apk"
-          timeout 120s adb install -r "$APK"
+          timeout 300s adb install -r "$APK"
 
           STAGE="grant-camera-permission"
           timeout 15s adb shell pm grant com.aicamera.pro android.permission.CAMERA
