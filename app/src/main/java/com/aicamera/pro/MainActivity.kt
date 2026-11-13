@@ -46,7 +46,6 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var portraitStrength = 0.72f
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var processingExecutor: ExecutorService
-    private lateinit var modelExecutor: ExecutorService
 
     private var capture: ImageCapture? = null
     @Volatile private var lensFacing = androidx.camera.core.CameraSelector.LENS_FACING_BACK
@@ -84,9 +83,7 @@ class MainActivity : AppCompatActivity() {
         CrashReporter.offerPending(this)
         cameraExecutor = Executors.newSingleThreadExecutor()
         processingExecutor = Executors.newSingleThreadExecutor()
-        modelExecutor = Executors.newSingleThreadExecutor()
         buildUi()
-        loadModels()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera()
@@ -95,47 +92,41 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadModels() {
-        setStatus("Preparing offline AI models…")
-        modelExecutor.execute {
-            // Load each model independently: one optional model failure must not disable the others.
-            try {
-                maximEnhancer = MaximEnhancer(this)
+    /**
+     * Heavy AI runtimes are initialized only when a user requests image processing.
+     * The launch path therefore does not touch TFLite, ML Kit or vendor GPU drivers.
+     */
+    private fun ensureAiModels() {
+        if (maximEnhancer == null) {
+            maximEnhancer = try {
+                MaximEnhancer(this)
             } catch (e: Exception) {
                 maximError = e.message ?: "MAXIM initialization failed"
+                throw IllegalStateException("MAXIM model could not be initialized: ${maximError}", e)
             }
-            try {
-                denoiser = NafNetDenoiser(this)
+        }
+        if (denoiser == null) {
+            denoiser = try {
+                NafNetDenoiser(this)
             } catch (e: Exception) {
                 denoiserError = e.message ?: "NAFNet initialization failed"
+                throw IllegalStateException("NAFNet model could not be initialized: ${denoiserError}", e)
             }
-            try {
-                sceneSegmenter = SceneSegmenter(this)
-            } catch (_: Exception) {
-                sceneSegmenter = null
-            }
-            try {
-                selfieSegmenter = SelfiePersonSegmenter()
-            } catch (e: Exception) {
-                selfieSegmenter = null
-                maximError = "Portrait segmentation unavailable"
-            }
-            try {
-                faceProtector = FaceProtector()
-            } catch (_: Exception) {
-                faceProtector = null
-            }
+        }
+        if (sceneSegmenter == null) {
+            sceneSegmenter = try { SceneSegmenter(this) } catch (_: Exception) { null }
+        }
+        if (faceProtector == null) {
+            faceProtector = try { FaceProtector() } catch (_: Exception) { null }
+        }
+    }
 
-            runOnUiThread {
-                val ready = maximEnhancer != null && denoiser != null
-                if (ready) {
-                    setStatus("AI READY • MAXIM + NAFNET • OFFLINE")
-                } else {
-                    val reason = listOfNotNull(denoiserError, maximError).joinToString(" • ")
-                    setStatus("AI MODEL INCOMPLETE • Vivid mode is available")
-                    if (reason.isNotBlank()) toast(reason)
-                }
-            }
+    private fun ensurePortraitModel(): SelfiePersonSegmenter {
+        selfieSegmenter?.let { return it }
+        return try {
+            SelfiePersonSegmenter().also { selfieSegmenter = it }
+        } catch (e: Exception) {
+            throw IllegalStateException("Portrait segmentation is unavailable: ${e.message ?: e.javaClass.simpleName}", e)
         }
     }
 
@@ -144,11 +135,14 @@ class MainActivity : AppCompatActivity() {
             return ColorEnhancer.enhance(bitmap, ColorEnhancer.Mode.VIVID)
         }
         if (selectedMode == ColorEnhancer.Mode.PORTRAIT) {
-            val segmenter = selfieSegmenter
-                ?: throw IllegalStateException("Portrait subject detector is unavailable. Please restart the app.")
+            runOnUiThread { setStatus("PORTRAIT • LOADING SUBJECT DETECTOR…") }
+            val segmenter = ensurePortraitModel()
             val personMask = segmenter.personMask(bitmap)
             return PortraitProcessor.apply(bitmap, personMask, portraitStrength)
         }
+
+        runOnUiThread { setStatus("AI • LOADING OFFLINE MODELS…") }
+        ensureAiModels()
 
         val denoiserModel = denoiser
             ?: throw IllegalStateException(denoiserError ?: "NAFNet is still loading. Please wait.")
@@ -266,7 +260,7 @@ class MainActivity : AppCompatActivity() {
         aiModeButton = modeChip("AI", true) {
             mode = ColorEnhancer.Mode.AI
             updateModeUi()
-            setStatus(if (maximEnhancer != null && denoiser != null) "AI • READY" else "AI • LOADING MODELS")
+            setStatus("AI • OFFLINE MODELS LOAD ON FIRST CAPTURE")
         }
         vividModeButton = modeChip("VIVID", false) {
             mode = ColorEnhancer.Mode.VIVID
@@ -276,7 +270,7 @@ class MainActivity : AppCompatActivity() {
         portraitModeButton = modeChip("PORTRAIT", false) {
             mode = ColorEnhancer.Mode.PORTRAIT
             updateModeUi()
-            setStatus(if (sceneSegmenter != null) "PORTRAIT • NATURAL DEPTH" else "PORTRAIT • LOADING MODEL")
+            setStatus("PORTRAIT • MODEL LOADS ON FIRST CAPTURE")
         }
         modeRow.addView(aiModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(4) })
         modeRow.addView(vividModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
@@ -712,7 +706,6 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         cameraExecutor.shutdownNow()
         processingExecutor.shutdownNow()
-        modelExecutor.shutdownNow()
         maximEnhancer?.close()
         denoiser?.close()
         sceneSegmenter?.close()
