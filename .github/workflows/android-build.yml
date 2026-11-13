@@ -146,13 +146,15 @@ jobs:
           STAGE="ai-processing-benchmark"
           adb logcat -c
           TEST_INPUT="$ROOT/testdata/aicamera3rd-test-photo.jpg"
+          cat "$ROOT"/testdata/photo_base64/part_*.txt | tr -d '\\r\\n' | base64 -d > "$TEST_INPUT"
           test -s "$TEST_INPUT"
+          echo "Test image restored from split JPEG fixture ($(stat -c %s "$TEST_INPUT") bytes)."
           DEVICE_INPUT="/sdcard/Android/data/com.aicamera.pro/files/aicamera3rd-test-photo.jpg"
           adb shell mkdir -p "/sdcard/Android/data/com.aicamera.pro/files"
           adb push "$TEST_INPUT" "$DEVICE_INPUT"
           adb shell test -s "$DEVICE_INPUT"
           adb logcat -c
-          echo "Starting AI processing on the supplied 1024x756 photo…"
+          echo "Starting AI processing on the supplied 512x378 photo…"
           adb shell am broadcast -n com.aicamera.pro/.BenchmarkReceiver \
             -a com.aicamera.pro.RUN_BENCHMARK \
             --es com.aicamera.pro.extra.INPUT "$DEVICE_INPUT" \
