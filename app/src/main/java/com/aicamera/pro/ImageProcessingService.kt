@@ -30,7 +30,6 @@ import java.util.concurrent.Executors
  */
 class ImageProcessingService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
-    @Volatile private var running = false
     private var wakeLock: PowerManager.WakeLock? = null
     private var maxim: MaximEnhancer? = null
     private var denoiser: NafNetDenoiser? = null
@@ -55,14 +54,8 @@ class ImageProcessingService : Service() {
         }
 
         startForeground(NOTIFICATION_ID, buildNotification("Preparing photo…", 0, 0, false))
-        if (running) {
-            notifyFinished(false, "Another photo is already being processed. Please wait for it to finish.")
-            stopSelf(startId)
-            return START_NOT_STICKY
-        }
-        running = true
-        acquireWakeLock()
         executor.execute {
+            acquireWakeLock()
             var source: Bitmap? = null
             var output: Bitmap? = null
             val file = File(inputPath)
@@ -96,9 +89,9 @@ class ImageProcessingService : Service() {
                 file.delete()
                 closeModels()
                 releaseWakeLock()
-                running = false
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf(startId)
+                if (stopSelfResult(startId)) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                }
             }
         }
         return START_REDELIVER_INTENT
@@ -145,7 +138,7 @@ class ImageProcessingService : Service() {
 
     private fun decodeInput(file: File): Bitmap {
         if (!file.isFile || file.length() <= 0L) throw IOException("Selected photo is missing or empty")
-        val maxEdge = if (getSystemService(android.app.ActivityManager::class.java).isLowRamDevice) 1440 else 1920
+        val maxEdge = if (getSystemService(android.app.ActivityManager::class.java).isLowRamDevice) 1280 else 1600
         if (Build.VERSION.SDK_INT >= 28) {
             val source = ImageDecoder.createSource(file)
             return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
