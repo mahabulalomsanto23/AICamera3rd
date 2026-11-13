@@ -63,6 +63,8 @@ class MainActivity : AppCompatActivity() {
         if (it) startCamera() else toast("Camera permission required")
     }
 
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     private val picker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@registerForActivityResult
         val selectedMode = mode
@@ -88,6 +90,11 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         processingExecutor = Executors.newSingleThreadExecutor()
         buildUi()
+
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera()
