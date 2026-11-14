@@ -456,7 +456,6 @@ class MainActivity : AppCompatActivity() {
             val serviceIntent = Intent(this, ImageProcessingService::class.java).apply {
                 putExtra(ImageProcessingService.EXTRA_INPUT, input.absolutePath)
                 putExtra(ImageProcessingService.EXTRA_MODE, selectedMode.name)
-                putExtra(ImageProcessingService.EXTRA_STRENGTH, portraitStrength)
             }
             androidx.core.content.ContextCompat.startForegroundService(this, serviceIntent)
             runOnUiThread {
