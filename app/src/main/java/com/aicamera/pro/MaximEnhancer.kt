@@ -93,8 +93,9 @@ class MaximEnhancer(context: Context) : AutoCloseable {
             else -> error("Unsupported MAXIM output type: ${outputTensor.dataType()}")
         }
 
-        // Transfer the model's learned color/tone residual to the full-resolution image.
-        // This keeps original fine detail instead of enlarging a 256px result.
+        // Transfer the learned color/tone residual without allocating multiple
+        // full-resolution IntArrays. The old implementation held two large pixel
+        // arrays plus two full-size bitmaps at once, which could OOM on 8GB phones.
         val deltaPixels = IntArray(enhancedSmall.size)
         for (i in deltaPixels.indices) {
             val a = sourcePixels[i]
@@ -106,23 +107,33 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         }
         val deltaBitmap = Bitmap.createBitmap(deltaPixels, 256, 256, Bitmap.Config.ARGB_8888)
         val fullDelta = Bitmap.createScaledBitmap(deltaBitmap, original.width, original.height, true)
-        if (!deltaBitmap.isRecycled) deltaBitmap.recycle()
-        val deltas = IntArray(original.width * original.height)
-        val base = IntArray(deltas.size)
-        fullDelta.getPixels(deltas, 0, original.width, 0, 0, original.width, original.height)
-        if (!fullDelta.isRecycled) fullDelta.recycle()
-        original.getPixels(base, 0, original.width, 0, 0, original.width, original.height)
-        for (i in base.indices) {
-            val c = base[i]
-            val d = deltas[i]
-            val r = (((c shr 16) and 255) + ((d shr 16) and 255) - 128).coerceIn(0, 255)
-            val g = (((c shr 8) and 255) + ((d shr 8) and 255) - 128).coerceIn(0, 255)
-            val b = ((c and 255) + (d and 255) - 128).coerceIn(0, 255)
-            base[i] = (c and -0x1000000) or (r shl 16) or (g shl 8) or b
+        if (deltaBitmap !== fullDelta && !deltaBitmap.isRecycled) deltaBitmap.recycle()
+
+        val result = Bitmap.createBitmap(original.width, original.height, Bitmap.Config.ARGB_8888)
+        val baseRow = IntArray(original.width)
+        val deltaRow = IntArray(original.width)
+        try {
+            for (y in 0 until original.height) {
+                original.getPixels(baseRow, 0, original.width, 0, y, original.width, 1)
+                fullDelta.getPixels(deltaRow, 0, original.width, 0, y, original.width, 1)
+                for (x in 0 until original.width) {
+                    val c = baseRow[x]
+                    val d = deltaRow[x]
+                    val r = (((c shr 16) and 255) + ((d shr 16) and 255) - 128).coerceIn(0, 255)
+                    val g = (((c shr 8) and 255) + ((d shr 8) and 255) - 128).coerceIn(0, 255)
+                    val b = ((c and 255) + (d and 255) - 128).coerceIn(0, 255)
+                    baseRow[x] = (c and -0x1000000) or (r shl 16) or (g shl 8) or b
+                }
+                result.setPixels(baseRow, 0, original.width, 0, y, original.width, 1)
+            }
+        } catch (t: Throwable) {
+            if (!result.isRecycled) result.recycle()
+            throw t
+        } finally {
+            if (!fullDelta.isRecycled) fullDelta.recycle()
+            if (original !== source && !original.isRecycled) original.recycle()
         }
-        return Bitmap.createBitmap(original.width, original.height, Bitmap.Config.ARGB_8888).also {
-            it.setPixels(base, 0, original.width, 0, 0, original.width, original.height)
-        }
+        return result
     }
 
     override fun close() = interpreter.close()
