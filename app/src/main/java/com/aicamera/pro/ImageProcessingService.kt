@@ -97,15 +97,24 @@ class ImageProcessingService : Service() {
                     source = null
                 }
                 val saveStarted = SystemClock.elapsedRealtime()
+                val outputWidth = output.width
+                val outputHeight = output.height
                 updateProgress("Saving to Gallery", 96)
                 val uri = saveBitmap(output)
-                updateProgress("Photo saved", 100)
+                // Release the large output bitmap BEFORE notifying the Activity.
+                // The completion broadcast restarts CameraX; doing that while the
+                // output bitmap is still live can overlap camera buffers with JPEG
+                // memory and trigger Android's low-memory process kill.
+                if (!output.isRecycled) output.recycle()
+                output = null
+                System.gc()
                 val saveMs = SystemClock.elapsedRealtime() - saveStarted
                 val totalMs = SystemClock.elapsedRealtime() - totalStarted
+                updateProgress("Photo saved", 100)
                 completeProgress("Photo saved to Pictures/AICamera3rd", true)
                 notifyFinished(true, "Photo saved to Pictures/AICamera3rd")
                 android.util.Log.i(TAG, "Processing complete: $uri")
-                if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName input=${if (generatedBenchmark) "synthetic" else "photo"} width=${output.width} height=${output.height} save_ms=$saveMs total_ms=$totalMs output=${uri.lastPathSegment}")
+                if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName input=${if (generatedBenchmark) "synthetic" else "photo"} width=$outputWidth height=$outputHeight save_ms=$saveMs total_ms=$totalMs output=${uri.lastPathSegment}")
             } catch (t: Throwable) {
                 android.util.Log.e(TAG, "Image processing failed", t)
                 if (benchmark) android.util.Log.e(TAG, "BENCHMARK_RESULT status=failure elapsed_ms=${SystemClock.elapsedRealtime() - totalStarted} error=${t.javaClass.simpleName}: ${t.message}")
@@ -192,11 +201,14 @@ class ImageProcessingService : Service() {
         val info = android.app.ActivityManager.MemoryInfo()
         manager.getMemoryInfo(info)
         val availableMiB = info.availMem / (1024L * 1024L)
+        // OnePlus 8 has enough headroom for a substantially larger working
+        // image. Keep a conservative fallback on devices reporting low memory,
+        // but avoid the previous 640-1024px cap that visibly softened output.
         val edge = when {
-            manager.isLowRamDevice || availableMiB < 1536L -> 640
-            availableMiB < 2304L -> 768
-            availableMiB < 3072L -> 896
-            else -> 1024
+            manager.isLowRamDevice || availableMiB < 1536L -> 1024
+            availableMiB < 2304L -> 1280
+            availableMiB < 3072L -> 1536
+            else -> 1792
         }
         android.util.Log.i(TAG, "AI_MEMORY_IMAGE_SIZE available_mib=$availableMiB low_ram=${manager.isLowRamDevice} max_edge=$edge")
         return edge
