@@ -155,6 +155,8 @@ class MainActivity : AppCompatActivity() {
      * The launch path therefore does not touch TFLite, ML Kit or vendor GPU drivers.
      */
     private fun ensureAiModels() {
+        // Stabilization path: load only MAXIM. NAFNet and the optional full-frame
+        // scene/face models are deferred until their combined memory cost is measured.
         if (maximEnhancer == null) {
             maximEnhancer = try {
                 MaximEnhancer(this)
@@ -162,20 +164,6 @@ class MainActivity : AppCompatActivity() {
                 maximError = e.message ?: "MAXIM initialization failed"
                 throw IllegalStateException("MAXIM model could not be initialized: ${maximError}", e)
             }
-        }
-        if (denoiser == null) {
-            denoiser = try {
-                NafNetDenoiser(this)
-            } catch (e: Exception) {
-                denoiserError = e.message ?: "NAFNet initialization failed"
-                throw IllegalStateException("NAFNet model could not be initialized: ${denoiserError}", e)
-            }
-        }
-        if (sceneSegmenter == null) {
-            sceneSegmenter = try { SceneSegmenter(this) } catch (_: Exception) { null }
-        }
-        if (faceProtector == null) {
-            faceProtector = try { FaceProtector() } catch (_: Exception) { null }
         }
     }
 
@@ -199,36 +187,32 @@ class MainActivity : AppCompatActivity() {
             return PortraitProcessor.apply(bitmap, personMask, portraitStrength)
         }
 
-        runOnUiThread { setStatus("AI • LOADING OFFLINE MODELS…") }
+        runOnUiThread { setStatus("AI • LOADING MAXIM…") }
         ensureAiModels()
-
-        val denoiserModel = denoiser
-            ?: throw IllegalStateException(denoiserError ?: "NAFNet is still loading. Please wait.")
         val maximModel = maximEnhancer
-            ?: throw IllegalStateException(maximError ?: "MAXIM is still loading. Please wait.")
+            ?: throw IllegalStateException(maximError ?: "MAXIM model is unavailable")
 
-        runOnUiThread { setStatus("AI • DENOISING DETAILS…") }
-        val denoised = denoiserModel.denoise(bitmap) { done, total ->
-            if (done == 1 || done == total || done % 4 == 0) {
-                runOnUiThread { setStatus("AI • DENOISING $done/$total") }
-            }
-        }
+        // Cap the gallery AI path at 1024px on the long edge to prevent large
+        // bitmap allocations and reduce CPU pressure on Snapdragon 865.
+        val scale = minOf(1.0, 1024.0 / maxOf(bitmap.width, bitmap.height))
+        val aiInput = if (scale < 1.0) {
+            Bitmap.createScaledBitmap(
+                bitmap,
+                (bitmap.width * scale).toInt().coerceAtLeast(1),
+                (bitmap.height * scale).toInt().coerceAtLeast(1),
+                true
+            )
+        } else bitmap
         try {
             runOnUiThread { setStatus("AI • ENHANCING COLORS…") }
-            val maxim = maximModel.enhance(denoised)
-            try {
-                runOnUiThread { setStatus("AI • SCENE & FACE REFINEMENT…") }
-                val sceneAware = sceneSegmenter?.let { it.apply(denoised, maxim) } ?: maxim
-                val finalBitmap = faceProtector?.let { it.protect(bitmap, sceneAware) } ?: sceneAware
-                if (sceneAware !== finalBitmap && sceneAware !== maxim && !sceneAware.isRecycled) sceneAware.recycle()
-                if (maxim !== finalBitmap && !maxim.isRecycled) maxim.recycle()
-                return finalBitmap
-            } catch (e: Exception) {
-                if (!maxim.isRecycled) maxim.recycle()
-                throw e
+            return maximModel.enhance(aiInput) { row, total ->
+                if (row == total || row % 24 == 0) {
+                    val percent = 30 + row * 65 / total.coerceAtLeast(1)
+                    runOnUiThread { setStatus("AI • ENHANCING ${percent}%") }
+                }
             }
         } finally {
-            if (!denoised.isRecycled) denoised.recycle()
+            if (aiInput !== bitmap && !aiInput.isRecycled) aiInput.recycle()
         }
     }
 
