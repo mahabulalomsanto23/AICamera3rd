@@ -110,25 +110,15 @@ class ImageProcessingService : Service() {
         val loadStarted = SystemClock.elapsedRealtime()
         updateProgress("Loading offline AI models", 0, 0)
         maxim = MaximEnhancer(this)
-        denoiser = NafNetDenoiser(this)
         android.util.Log.i(TAG, "BENCHMARK_STAGE model_load_ms=${SystemClock.elapsedRealtime() - loadStarted}")
-        val denoiseStarted = SystemClock.elapsedRealtime()
-        updateProgress("Denoising details", 0, 0)
-        val denoised = denoiser!!.denoise(source) { done, total ->
-            if (done == 1 || done == total || done % 2 == 0) {
-                updateProgress("Denoising details", done, total)
-            if (done == 1 || done == total || done % 2 == 0) {
-                android.util.Log.i(TAG, "BENCHMARK_STAGE denoise_progress=$done/$total")
-            }
-            }
-        }
-        android.util.Log.i(TAG, "BENCHMARK_STAGE denoise_ms=${SystemClock.elapsedRealtime() - denoiseStarted}")
+        // NAFNet's 256px tiled CPU inference was taking many minutes per tile
+        // on the CI emulator. Keep the learned MAXIM color/tone enhancement
+        // and skip this non-essential denoising stage for a usable mobile path.
+        val enhanceStarted = SystemClock.elapsedRealtime()
+        updateProgress("Enhancing colors", 0, 0)
+        val enhanced = maxim!!.enhance(source)
+        android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
         try {
-            val enhanceStarted = SystemClock.elapsedRealtime()
-            updateProgress("Enhancing colors", 0, 0)
-            val enhanced = maxim!!.enhance(denoised)
-            android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
-            if (!denoised.isRecycled) denoised.recycle()
             var sceneResult: Bitmap? = null
             try {
                 val refineStarted = SystemClock.elapsedRealtime()
