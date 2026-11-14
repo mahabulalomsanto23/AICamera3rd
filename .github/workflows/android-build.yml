@@ -186,21 +186,6 @@ jobs:
             sleep 2
           done
           kill "$LOGCAT_PID" 2>/dev/null || true
-              wait "$LOGCAT_PID" 2>/dev/null || true
-              timeout 15s adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
-              exit 1
-            fi
-            if ! timeout 10s adb shell pidof com.aicamera.pro 2>/dev/null | tr -d '\r' | grep -q '[0-9]'; then
-              echo "App process exited before the AI benchmark result was logged." | tee "$ROOT/ai-benchmark.txt"
-              kill "$LOGCAT_PID" 2>/dev/null || true
-              wait "$LOGCAT_PID" 2>/dev/null || true
-              timeout 15s adb logcat -d -v time > "$ROOT/ai-benchmark-full-logcat.txt" 2>&1 || true
-              timeout 15s adb shell dumpsys activity services com.aicamera.pro > "$ROOT/ai-service-state.txt" 2>&1 || true
-              exit 1
-            fi
-            sleep 2
-          done
-          kill "$LOGCAT_PID" 2>/dev/null || true
           wait "$LOGCAT_PID" 2>/dev/null || true
           grep -E "BENCHMARK_RESULT" "$ROOT/ai-benchmark-logcat.txt" > "$ROOT/ai-benchmark.txt" || true
 
