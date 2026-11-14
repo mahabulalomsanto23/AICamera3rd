@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
+import android.os.Debug
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
@@ -113,8 +114,11 @@ class ImageProcessingService : Service() {
 
     private fun processAi(source: Bitmap): Bitmap {
         val loadStarted = SystemClock.elapsedRealtime()
+        logMemory("before_model_load")
+        ensureAiMemoryHeadroom()
         updateProgress("Loading offline AI model", 10)
         maxim = MaximEnhancer(this)
+        logMemory("after_model_load")
         updateProgress("AI model ready", 25)
         android.util.Log.i(TAG, "BENCHMARK_STAGE model_load_ms=${SystemClock.elapsedRealtime() - loadStarted}")
 
@@ -131,6 +135,7 @@ class ImageProcessingService : Service() {
                     updateProgress("Applying AI color enhancement", percent)
                 }
             }.also {
+                logMemory("after_inference")
                 updateProgress("AI enhancement complete", 92)
                 android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
             }
@@ -145,6 +150,29 @@ class ImageProcessingService : Service() {
             }
             if (maxim === activeMaxim) maxim = null
         }
+    }
+
+    /**
+     * MAXIM has a large native tensor working set. Refuse to start when Android
+     * reports critically low system memory rather than risking a system-wide LMK.
+     */
+    private fun ensureAiMemoryHeadroom() {
+        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        val info = android.app.ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        val required = maxOf(1536L * 1024L * 1024L, info.threshold * 2L)
+        android.util.Log.i(TAG, "AI_MEMORY_PREFLIGHT avail=${info.availMem} threshold=${info.threshold} required=$required low=${info.lowMemory}")
+        if (info.lowMemory || info.availMem < required) {
+            throw IOException("Not enough free memory for safe AI processing. Close other apps and try again.")
+        }
+    }
+
+    private fun logMemory(stage: String) {
+        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        val info = android.app.ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        val runtime = Runtime.getRuntime()
+        android.util.Log.i(TAG, "AI_MEMORY stage=$stage avail=${info.availMem} threshold=${info.threshold} low=${info.lowMemory} java_used=${runtime.totalMemory() - runtime.freeMemory()} java_max=${runtime.maxMemory()} native_heap=${Debug.getNativeHeapAllocatedSize()}")
     }
 
     /**
