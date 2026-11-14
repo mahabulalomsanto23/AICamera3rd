@@ -105,7 +105,7 @@ class ImageProcessingService : Service() {
                 completeProgress("Photo saved to Pictures/AICamera3rd", true)
                 notifyFinished(true, "Photo saved to Pictures/AICamera3rd")
                 android.util.Log.i(TAG, "Processing complete: $uri")
-                if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName input=${if (generatedBenchmark) "synthetic" else "photo"} width=${source.width} height=${source.height} save_ms=$saveMs total_ms=$totalMs output=${uri.lastPathSegment}")
+                if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName input=${if (generatedBenchmark) "synthetic" else "photo"} width=${output.width} height=${output.height} save_ms=$saveMs total_ms=$totalMs output=${uri.lastPathSegment}")
             } catch (t: Throwable) {
                 android.util.Log.e(TAG, "Image processing failed", t)
                 if (benchmark) android.util.Log.e(TAG, "BENCHMARK_RESULT status=failure elapsed_ms=${SystemClock.elapsedRealtime() - totalStarted} error=${t.javaClass.simpleName}: ${t.message}")
