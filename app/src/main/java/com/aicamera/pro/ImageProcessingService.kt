@@ -83,7 +83,6 @@ class ImageProcessingService : Service() {
                     ColorEnhancer.Mode.AI -> processAi(source)
                 }
                 val saveStarted = SystemClock.elapsedRealtime()
-                updateProgress("Saving to Gallery", 0, 0)
                 updateProgress("Saving to Gallery", 96)
                 val uri = saveBitmap(output)
                 updateProgress("Photo saved", 100)
