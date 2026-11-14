@@ -153,15 +153,25 @@ jobs:
 
           STAGE="ai-processing-benchmark"
           adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
-          echo "Starting AI processing on a deterministic synthetic 1600x1200 photo…"
+          TEST_INPUT="$ROOT/testdata/aicamera3rd-test-photo.jpg"
+          test -s "$TEST_INPUT"
+          file "$TEST_INPUT"
+          sha256sum "$TEST_INPUT" | tee "$ROOT/test-input-photo.sha256"
+          cp "$TEST_INPUT" "$ROOT/test-input-photo.jpg"
+          DEVICE_INPUT="/sdcard/Android/data/com.aicamera.pro/files/aicamera3rd-test-photo.jpg"
+          timeout 10s adb shell mkdir -p "/sdcard/Android/data/com.aicamera.pro/files"
+          timeout 60s adb push "$TEST_INPUT" "$DEVICE_INPUT"
+          timeout 10s adb shell test -s "$DEVICE_INPUT"
+          adb logcat -c 2>/dev/null || echo "WARNING: logcat buffer clear unavailable; continuing with tag-filtered diagnostics."
+          echo "Starting AI processing on the fixed CI test photo…"
           BENCHMARK_DONE=""
           adb logcat -v time "AICameraProcessing:I" "AICameraBenchmark:I" "AICameraNafNet:I" "*:S" > "$ROOT/ai-benchmark-logcat.txt" 2>&1 &
           LOGCAT_PID=$!
           timeout 90s adb shell am start -n com.aicamera.pro/.BenchmarkActivity \
-            --es com.aicamera.pro.extra.INPUT "benchmark://generated" \
+            --es com.aicamera.pro.extra.INPUT "$DEVICE_INPUT" \
             --es com.aicamera.pro.extra.MODE AI
           timeout 10s adb shell input keyevent 3 || true
-          echo "Benchmark activity launched; AI runs in the foreground service."
+          echo "Benchmark activity launched; photo processing continues in foreground service."
           for attempt in $(seq 1 300); do
             grep -E "BENCHMARK_RESULT" "$ROOT/ai-benchmark-logcat.txt" > "$ROOT/ai-benchmark.txt" || true
             if grep -q "BENCHMARK_RESULT" "$ROOT/ai-benchmark.txt"; then
