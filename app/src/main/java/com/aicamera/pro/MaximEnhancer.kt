@@ -35,7 +35,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         outputIndex = fullOutputIndex
     }
 
-    fun enhance(source: Bitmap): Bitmap {
+    fun enhance(source: Bitmap, onProgress: ((Int, Int) -> Unit)? = null): Bitmap {
         val original = if (source.config == Bitmap.Config.ARGB_8888) source else source.copy(Bitmap.Config.ARGB_8888, false)
         val small = Bitmap.createScaledBitmap(original, 256, 256, true)
         val sourcePixels = IntArray(256 * 256)
@@ -138,6 +138,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
                     outRow[x] = (c and -0x1000000) or (r shl 16) or (g shl 8) or b
                 }
                 result.setPixels(outRow, 0, original.width, 0, y, original.width, 1)
+                if (onProgress != null && (y == original.height - 1 || y % 24 == 0)) onProgress(y + 1, original.height)
             }
         } catch (t: Throwable) {
             if (!result.isRecycled) result.recycle()
