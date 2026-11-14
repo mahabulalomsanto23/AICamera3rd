@@ -2,7 +2,9 @@ package com.aicamera.pro
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -58,6 +60,16 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var maximError: String? = null
     @Volatile private var denoiserError: String? = null
     private var busy = false
+    private var progressReceiverRegistered = false
+    private val processingProgressReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            if (intent?.action != ImageProcessingService.ACTION_PROGRESS) return
+            val title = intent.getStringExtra(ImageProcessingService.EXTRA_PROGRESS_TITLE) ?: "Processing"
+            val percent = intent.getIntExtra(ImageProcessingService.EXTRA_PROGRESS_PERCENT, 0)
+            val active = intent.getBooleanExtra(ImageProcessingService.EXTRA_PROGRESS_ACTIVE, false)
+            setStatus(if (active) "AI • $title • $percent%" else if (percent == 100) "SAVED • 100%" else "PROCESSING FAILED")
+        }
+    }
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         if (it) startCamera() else toast("Camera permission required")
@@ -81,6 +93,32 @@ class MainActivity : AppCompatActivity() {
                 showFailure("Could not start photo processing: ${e.message ?: e.javaClass.simpleName}")
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!progressReceiverRegistered) {
+            ContextCompat.registerReceiver(
+                this, processingProgressReceiver,
+                IntentFilter(ImageProcessingService.ACTION_PROGRESS),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            progressReceiverRegistered = true
+        }
+        val progress = getSharedPreferences(ImageProcessingService.PROGRESS_PREFS, MODE_PRIVATE)
+        if (progress.getBoolean("active", false)) {
+            val title = progress.getString("title", "Processing") ?: "Processing"
+            val percent = progress.getInt("percent", 0)
+            setStatus("AI • $title • $percent%")
+        }
+    }
+
+    override fun onStop() {
+        if (progressReceiverRegistered) {
+            unregisterReceiver(processingProgressReceiver)
+            progressReceiverRegistered = false
+        }
+        super.onStop()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
