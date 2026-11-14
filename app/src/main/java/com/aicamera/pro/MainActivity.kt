@@ -40,12 +40,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var aiModeButton: TextView
     private lateinit var vividModeButton: TextView
-    private lateinit var portraitModeButton: TextView
-    private lateinit var lowStrengthButton: TextView
-    private lateinit var mediumStrengthButton: TextView
-    private lateinit var highStrengthButton: TextView
-    private lateinit var portraitStrengthRow: LinearLayout
-    @Volatile private var portraitStrength = 0.72f
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var processingExecutor: ExecutorService
 
@@ -56,7 +50,6 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var faceProtector: FaceProtector? = null
     @Volatile private var denoiser: NafNetDenoiser? = null
     @Volatile private var sceneSegmenter: SceneSegmenter? = null
-    @Volatile private var selfieSegmenter: SelfiePersonSegmenter? = null
     @Volatile private var maximError: String? = null
     @Volatile private var denoiserError: String? = null
     private var busy = false
@@ -167,26 +160,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun ensurePortraitModel(): SelfiePersonSegmenter {
-        selfieSegmenter?.let { return it }
-        return try {
-            SelfiePersonSegmenter().also { selfieSegmenter = it }
-        } catch (e: Exception) {
-            throw IllegalStateException("Portrait segmentation is unavailable: ${e.message ?: e.javaClass.simpleName}", e)
-        }
-    }
-
     private fun enhance(bitmap: Bitmap, selectedMode: ColorEnhancer.Mode): Bitmap {
         if (selectedMode == ColorEnhancer.Mode.VIVID) {
             return ColorEnhancer.enhance(bitmap, ColorEnhancer.Mode.VIVID)
         }
-        if (selectedMode == ColorEnhancer.Mode.PORTRAIT) {
-            runOnUiThread { setStatus("PORTRAIT • LOADING SUBJECT DETECTOR…") }
-            val segmenter = ensurePortraitModel()
-            val personMask = segmenter.personMask(bitmap)
-            return PortraitProcessor.apply(bitmap, personMask, portraitStrength)
-        }
-
         runOnUiThread { setStatus("AI • LOADING MAXIM…") }
         ensureAiModels()
         val maximModel = maximEnhancer
@@ -303,39 +280,19 @@ class MainActivity : AppCompatActivity() {
             updateModeUi()
             setStatus("VIVID • COLOR ENHANCEMENT")
         }
-        portraitModeButton = modeChip("PORTRAIT", false) {
-            mode = ColorEnhancer.Mode.PORTRAIT
+        aiModeButton = modeChip("AI", true) {
+            mode = ColorEnhancer.Mode.AI
             updateModeUi()
-            setStatus("PORTRAIT • MODEL LOADS ON FIRST CAPTURE")
+            setStatus("AI • OFFLINE MODELS LOAD ON FIRST CAPTURE")
         }
-        modeRow.addView(aiModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(4) })
-        modeRow.addView(vividModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-            marginStart = dp(4); marginEnd = dp(4)
-        })
-        modeRow.addView(portraitModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4) })
-        bottomPanel.addView(modeRow, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(4) })
-
-        val strengthRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+        vividModeButton = modeChip("VIVID", false) {
+            mode = ColorEnhancer.Mode.VIVID
+            updateModeUi()
+            setStatus("VIVID • COLOR ENHANCEMENT")
         }
-        lowStrengthButton = modeChip("LOW", false) {
-            portraitStrength = 0.55f
-            updatePortraitStrengthUi()
-        }
-        mediumStrengthButton = modeChip("MEDIUM", true) {
-            portraitStrength = 0.72f
-            updatePortraitStrengthUi()
-        }
-        highStrengthButton = modeChip("HIGH", false) {
-            portraitStrength = 0.90f
-            updatePortraitStrengthUi()
-        }
-        strengthRow.addView(lowStrengthButton, LinearLayout.LayoutParams(dp(76), dp(30)).apply { marginEnd = dp(6) })
-        strengthRow.addView(mediumStrengthButton, LinearLayout.LayoutParams(dp(88), dp(30)).apply { marginStart = dp(3); marginEnd = dp(3) })
-        strengthRow.addView(highStrengthButton, LinearLayout.LayoutParams(dp(76), dp(30)).apply { marginStart = dp(6) })
-        bottomPanel.addView(strengthRow, LinearLayout.LayoutParams(-1, dp(34)).apply { bottomMargin = dp(10) })
-        portraitStrengthRow = strengthRow
+        modeRow.addView(aiModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(5) })
+        modeRow.addView(vividModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(5) })
+        bottomPanel.addView(modeRow, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(12) })
 
         val captureRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -433,27 +390,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateModeUi() {
-        if (!::aiModeButton.isInitialized || !::vividModeButton.isInitialized ||
-            !::portraitModeButton.isInitialized) return
+        if (!::aiModeButton.isInitialized || !::vividModeButton.isInitialized) return
         styleModeButton(aiModeButton, mode == ColorEnhancer.Mode.AI)
         styleModeButton(vividModeButton, mode == ColorEnhancer.Mode.VIVID)
-        styleModeButton(portraitModeButton, mode == ColorEnhancer.Mode.PORTRAIT)
-        if (::portraitStrengthRow.isInitialized) {
-            portraitStrengthRow.visibility = if (mode == ColorEnhancer.Mode.PORTRAIT) android.view.View.VISIBLE else android.view.View.GONE
-        }
-        updatePortraitStrengthUi()
     }
 
     private fun styleModeButton(button: TextView, selected: Boolean) {
         button.setTextColor(if (selected) Color.BLACK else Color.WHITE)
         button.background = rounded(if (selected) Color.WHITE else 0x55333333, 24)
-    }
-
-    private fun updatePortraitStrengthUi() {
-        if (!::lowStrengthButton.isInitialized) return
-        styleModeButton(lowStrengthButton, portraitStrength < 0.6f)
-        styleModeButton(mediumStrengthButton, portraitStrength in 0.6f..0.8f)
-        styleModeButton(highStrengthButton, portraitStrength > 0.8f)
     }
 
     private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
@@ -773,7 +717,6 @@ class MainActivity : AppCompatActivity() {
         maximEnhancer?.close()
         denoiser?.close()
         sceneSegmenter?.close()
-        selfieSegmenter?.close()
         faceProtector?.close()
         super.onDestroy()
     }
