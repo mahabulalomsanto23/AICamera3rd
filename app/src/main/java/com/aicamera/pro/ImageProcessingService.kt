@@ -67,7 +67,13 @@ class ImageProcessingService : Service() {
             try {
                 val mode = ColorEnhancer.Mode.valueOf(modeName)
                 updateProgress(if (generatedBenchmark) "Creating benchmark photo" else "Opening photo", 2)
+                if (mode == ColorEnhancer.Mode.AI && !generatedBenchmark) {
+                    // Check system headroom before decoding a large gallery image.
+                    ensureAiMemoryHeadroom()
+                }
+                logMemory("before_decode")
                 source = if (generatedBenchmark) createBenchmarkBitmap() else decodeInput(file!!, mode)
+                logMemory("after_decode")
                 updateProgress("Photo ready", 8)
                 output = when (mode) {
                     ColorEnhancer.Mode.VIVID -> {
@@ -82,6 +88,13 @@ class ImageProcessingService : Service() {
                         try { PortraitProcessor.apply(source, mask, strength).also { updateProgress("Portrait effect complete", 82) } } finally { if (!mask.isRecycled) mask.recycle() }
                     }
                     ColorEnhancer.Mode.AI -> processAi(source)
+                }
+                // MAXIM has produced a separate output bitmap. Drop the decoded
+                // source before JPEG encoding so both full-size bitmaps are not
+                // retained during the save stage.
+                if (mode == ColorEnhancer.Mode.AI && source != null && output !== source) {
+                    if (!source!!.isRecycled) source!!.recycle()
+                    source = null
                 }
                 val saveStarted = SystemClock.elapsedRealtime()
                 updateProgress("Saving to Gallery", 96)
@@ -160,11 +173,33 @@ class ImageProcessingService : Service() {
         val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
         val info = android.app.ActivityManager.MemoryInfo()
         manager.getMemoryInfo(info)
-        val required = maxOf(1536L * 1024L * 1024L, info.threshold * 2L)
+        // Keep a safety margin without imposing an unnecessarily rigid 1.5 GB
+        // free-RAM requirement on every device.
+        val required = maxOf(768L * 1024L * 1024L, info.threshold * 3L / 2L)
         android.util.Log.i(TAG, "AI_MEMORY_PREFLIGHT avail=${info.availMem} threshold=${info.threshold} required=$required low=${info.lowMemory}")
         if (info.lowMemory || info.availMem < required) {
-            throw IOException("Not enough free memory for safe AI processing. Close other apps and try again.")
+            throw IOException("Android reports critically low free memory. Close other apps and try again.")
         }
+    }
+
+    /**
+     * MAXIM's learned network always runs at 256x256. The source bitmap is used
+     * to preserve texture while transferring its learned tone correction, so
+     * choose the output working resolution from current system memory.
+     */
+    private fun selectAiMaxEdge(): Int {
+        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        val info = android.app.ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        val availableMiB = info.availMem / (1024L * 1024L)
+        val edge = when {
+            manager.isLowRamDevice || availableMiB < 1536L -> 640
+            availableMiB < 2304L -> 768
+            availableMiB < 3072L -> 896
+            else -> 1024
+        }
+        android.util.Log.i(TAG, "AI_MEMORY_IMAGE_SIZE available_mib=$availableMiB low_ram=${manager.isLowRamDevice} max_edge=$edge")
+        return edge
     }
 
     private fun logMemory(stage: String) {
@@ -201,7 +236,7 @@ class ImageProcessingService : Service() {
         if (!file.isFile || file.length() <= 0L) throw IOException("Selected photo is missing or empty")
         // Keep the heavy MAXIM path conservative on-device; Vivid/Portrait retain their existing resolution.
         val maxEdge = when {
-            mode == ColorEnhancer.Mode.AI -> 1024
+            mode == ColorEnhancer.Mode.AI -> selectAiMaxEdge()
             getSystemService(android.app.ActivityManager::class.java).isLowRamDevice -> 1280
             else -> 1600
         }
