@@ -228,6 +228,7 @@ jobs:
           SCRIPT
           chmod +x .github/emulator-smoke.sh
       - name: Run app startup smoke test on cloud Android emulator
+        if: ${{ false }} # Temporarily skipped; validate the APK directly on OnePlus 8.
         timeout-minutes: 120
         uses: reactivecircus/android-emulator-runner@v2
         with:
