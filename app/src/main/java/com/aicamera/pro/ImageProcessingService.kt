@@ -66,7 +66,7 @@ class ImageProcessingService : Service() {
             try {
                 val mode = ColorEnhancer.Mode.valueOf(modeName)
                 updateProgress(if (generatedBenchmark) "Creating benchmark photo" else "Opening photo", 2)
-                source = if (generatedBenchmark) createBenchmarkBitmap() else decodeInput(file!!)
+                source = if (generatedBenchmark) createBenchmarkBitmap() else decodeInput(file!!, mode)
                 updateProgress("Photo ready", 8)
                 output = when (mode) {
                     ColorEnhancer.Mode.VIVID -> {
@@ -113,46 +113,30 @@ class ImageProcessingService : Service() {
 
     private fun processAi(source: Bitmap): Bitmap {
         val loadStarted = SystemClock.elapsedRealtime()
-        updateProgress("Loading offline AI models", 10)
+        updateProgress("Loading offline AI model", 10)
         maxim = MaximEnhancer(this)
         updateProgress("AI model ready", 25)
         android.util.Log.i(TAG, "BENCHMARK_STAGE model_load_ms=${SystemClock.elapsedRealtime() - loadStarted}")
-        // NAFNet's 256px tiled CPU inference was taking many minutes per tile
-        // on the CI emulator. Keep the learned MAXIM color/tone enhancement
-        // and skip this non-essential denoising stage for a usable mobile path.
+
+        // NAFNet remains bypassed: its tiled CPU inference is not yet suitable for this device path.
+        // Run only MAXIM during stabilization. Scene segmentation and face refinement each allocate
+        // additional full-resolution pixel buffers and are intentionally deferred to avoid memory spikes.
         val enhanceStarted = SystemClock.elapsedRealtime()
         updateProgress("AI color model running", 30, true)
-        val enhanced = maxim!!.enhance(source) { row, total ->
-            if (row == total || row % 24 == 0) {
-                val percent = 55 + (row * 25 / total.coerceAtLeast(1))
-                updateProgress("Applying color enhancement", percent)
+        return try {
+            maxim!!.enhance(source) { row, total ->
+                if (row == total || row % 24 == 0) {
+                    val percent = 55 + (row * 35 / total.coerceAtLeast(1))
+                    updateProgress("Applying AI color enhancement", percent)
+                }
+            }.also {
+                updateProgress("AI enhancement complete", 92)
+                android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
             }
+        } catch (t: Throwable) {
+            android.util.Log.e(TAG, "MAXIM enhancement failed", t)
+            throw t
         }
-        updateProgress("Color enhancement complete", 82)
-        android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
-        var sceneResult: Bitmap? = null
-            try {
-                val refineStarted = SystemClock.elapsedRealtime()
-                updateProgress("Refining scene and face details", 88)
-                scene = try { SceneSegmenter(this) } catch (e: Exception) {
-                    android.util.Log.w(TAG, "Optional scene segmentation unavailable", e)
-                    null
-                }
-                faces = try { FaceProtector() } catch (e: Exception) {
-                    android.util.Log.w(TAG, "Optional face protection unavailable", e)
-                    null
-                }
-                sceneResult = scene?.apply(source, enhanced) ?: enhanced
-                val final = faces?.protect(source, sceneResult) ?: sceneResult
-                android.util.Log.i(TAG, "BENCHMARK_STAGE scene_face_refine_ms=${SystemClock.elapsedRealtime() - refineStarted}")
-                if (sceneResult !== final && sceneResult !== enhanced && !sceneResult.isRecycled) sceneResult.recycle()
-                if (enhanced !== final && !enhanced.isRecycled) enhanced.recycle()
-                return final
-            } catch (t: Throwable) {
-                if (sceneResult != null && sceneResult !== enhanced && !sceneResult.isRecycled) sceneResult.recycle()
-                if (!enhanced.isRecycled) enhanced.recycle()
-                throw t
-            }
     }
 
     /**
@@ -177,9 +161,14 @@ class ImageProcessingService : Service() {
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
 
-    private fun decodeInput(file: File): Bitmap {
+    private fun decodeInput(file: File, mode: ColorEnhancer.Mode): Bitmap {
         if (!file.isFile || file.length() <= 0L) throw IOException("Selected photo is missing or empty")
-        val maxEdge = if (getSystemService(android.app.ActivityManager::class.java).isLowRamDevice) 1280 else 1600
+        // Keep the heavy MAXIM path conservative on-device; Vivid/Portrait retain their existing resolution.
+        val maxEdge = when {
+            mode == ColorEnhancer.Mode.AI -> 1024
+            getSystemService(android.app.ActivityManager::class.java).isLowRamDevice -> 1280
+            else -> 1600
+        }
         if (Build.VERSION.SDK_INT >= 28) {
             val source = ImageDecoder.createSource(file)
             return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
