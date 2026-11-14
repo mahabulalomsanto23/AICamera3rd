@@ -105,32 +105,44 @@ class MaximEnhancer(context: Context) : AutoCloseable {
             val db = ((b and 255) - (a and 255) + 128).coerceIn(0, 255)
             deltaPixels[i] = (0xFF shl 24) or (dr shl 16) or (dg shl 8) or db
         }
-        val deltaBitmap = Bitmap.createBitmap(deltaPixels, 256, 256, Bitmap.Config.ARGB_8888)
-        val fullDelta = Bitmap.createScaledBitmap(deltaBitmap, original.width, original.height, true)
-        if (deltaBitmap !== fullDelta && !deltaBitmap.isRecycled) deltaBitmap.recycle()
-
+        // Bilinearly sample the 256px residual per output row. This avoids
+        // allocating a second full-resolution bitmap for the upscaled residual.
         val result = Bitmap.createBitmap(original.width, original.height, Bitmap.Config.ARGB_8888)
         val baseRow = IntArray(original.width)
-        val deltaRow = IntArray(original.width)
+        val outRow = IntArray(original.width)
         try {
             for (y in 0 until original.height) {
                 original.getPixels(baseRow, 0, original.width, 0, y, original.width, 1)
-                fullDelta.getPixels(deltaRow, 0, original.width, 0, y, original.width, 1)
+                val fy = (y * 255f / maxOf(1, original.height - 1)).coerceIn(0f, 255f)
+                val y0 = fy.toInt()
+                val y1 = (y0 + 1).coerceAtMost(255)
+                val wy = fy - y0
                 for (x in 0 until original.width) {
+                    val fx = (x * 255f / maxOf(1, original.width - 1)).coerceIn(0f, 255f)
+                    val x0 = fx.toInt()
+                    val x1 = (x0 + 1).coerceAtMost(255)
+                    val wx = fx - x0
+                    val i00 = deltaPixels[y0 * 256 + x0]
+                    val i10 = deltaPixels[y0 * 256 + x1]
+                    val i01 = deltaPixels[y1 * 256 + x0]
+                    val i11 = deltaPixels[y1 * 256 + x1]
                     val c = baseRow[x]
-                    val d = deltaRow[x]
-                    val r = (((c shr 16) and 255) + ((d shr 16) and 255) - 128).coerceIn(0, 255)
-                    val g = (((c shr 8) and 255) + ((d shr 8) and 255) - 128).coerceIn(0, 255)
-                    val b = ((c and 255) + (d and 255) - 128).coerceIn(0, 255)
-                    baseRow[x] = (c and -0x1000000) or (r shl 16) or (g shl 8) or b
+                    fun residual(shift: Int): Int {
+                        val a = ((i00 shr shift) and 255) * (1f - wx) + ((i10 shr shift) and 255) * wx
+                        val b = ((i01 shr shift) and 255) * (1f - wx) + ((i11 shr shift) and 255) * wx
+                        return (a * (1f - wy) + b * wy).toInt()
+                    }
+                    val r = (((c shr 16) and 255) + residual(16) - 128).coerceIn(0, 255)
+                    val g = (((c shr 8) and 255) + residual(8) - 128).coerceIn(0, 255)
+                    val b = ((c and 255) + residual(0) - 128).coerceIn(0, 255)
+                    outRow[x] = (c and -0x1000000) or (r shl 16) or (g shl 8) or b
                 }
-                result.setPixels(baseRow, 0, original.width, 0, y, original.width, 1)
+                result.setPixels(outRow, 0, original.width, 0, y, original.width, 1)
             }
         } catch (t: Throwable) {
             if (!result.isRecycled) result.recycle()
             throw t
         } finally {
-            if (!fullDelta.isRecycled) fullDelta.recycle()
             if (original !== source && !original.isRecycled) original.recycle()
         }
         return result
