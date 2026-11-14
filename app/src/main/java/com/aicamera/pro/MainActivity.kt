@@ -44,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var processingExecutor: ExecutorService
 
     private var capture: ImageCapture? = null
+    @Volatile private var cameraProvider: ProcessCameraProvider? = null
+    @Volatile private var galleryProcessing = false
     @Volatile private var lensFacing = androidx.camera.core.CameraSelector.LENS_FACING_BACK
     @Volatile private var mode = ColorEnhancer.Mode.AI
     @Volatile private var maximEnhancer: MaximEnhancer? = null
@@ -69,7 +71,15 @@ class MainActivity : AppCompatActivity() {
                 "Photo ready", "AI model ready" -> "Ready"
                 else -> title
             }
-            setStatus(if (active) "AI • $compact • $percent%" else if (percent == 100) "SAVED • 100%" else "PROCESSING FAILED")
+            if (active) {
+                setStatus("AI • $compact • $percent%")
+            } else {
+                setBusy(false, if (percent == 100) "SAVED • Pictures/AICamera3rd" else "PROCESSING FAILED")
+                if (galleryProcessing && !isFinishing) {
+                    galleryProcessing = false
+                    startCamera()
+                }
+            }
         }
     }
 
@@ -82,7 +92,12 @@ class MainActivity : AppCompatActivity() {
     private val picker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@registerForActivityResult
         val selectedMode = mode
+        galleryProcessing = true
         setBusy(true, "Preparing photo for background processing…")
+        // Gallery AI inference is memory intensive. Release CameraX preview/capture
+        // buffers before copying and processing the selected image.
+        cameraProvider?.unbindAll()
+        capture = null
         processingExecutor.execute {
             val input = File(cacheDir, "import_${System.currentTimeMillis()}.img")
             try {
@@ -112,6 +127,10 @@ class MainActivity : AppCompatActivity() {
             val title = progress.getString("title", "Processing") ?: "Processing"
             val percent = progress.getInt("percent", 0)
             setStatus("AI • $title • $percent%")
+        } else if (galleryProcessing && !isFinishing) {
+            galleryProcessing = false
+            setBusy(false, "READY • Camera")
+            startCamera()
         }
     }
 
@@ -410,6 +429,7 @@ class MainActivity : AppCompatActivity() {
         future.addListener({
             try {
                 val provider = future.get()
+                cameraProvider = provider
                 val cameraPreview = Preview.Builder()
                     .setTargetAspectRatio(androidx.camera.core.AspectRatio.RATIO_4_3)
                     .build().also {
@@ -459,7 +479,7 @@ class MainActivity : AppCompatActivity() {
             }
             androidx.core.content.ContextCompat.startForegroundService(this, serviceIntent)
             runOnUiThread {
-                setBusy(false, "PROCESSING IN BACKGROUND • CHECK NOTIFICATION")
+                setBusy(true, "PROCESSING IN BACKGROUND • CHECK NOTIFICATION")
                 toast("Photo processing started. You can minimize the app or lock the screen; it will save to Gallery when finished.")
             }
         } catch (e: Exception) {
@@ -711,6 +731,8 @@ class MainActivity : AppCompatActivity() {
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 
     override fun onDestroy() {
+        cameraProvider?.unbindAll()
+        cameraProvider = null
         cameraExecutor.shutdownNow()
         processingExecutor.shutdownNow()
         maximEnhancer?.close()
