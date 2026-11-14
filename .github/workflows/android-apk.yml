@@ -26,13 +26,15 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APKs
-        run: gradle --no-daemon assembleDebug
+      - name: Build debug and release APKs
+        run: gradle --no-daemon assembleDebug assembleRelease
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AICamera3rd-debug-apks
-          path: app/build/outputs/apk/**/*.apk
+          name: AICameraPro-APK
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
