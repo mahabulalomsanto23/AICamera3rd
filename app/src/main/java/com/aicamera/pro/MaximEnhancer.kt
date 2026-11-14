@@ -2,6 +2,8 @@ package com.aicamera.pro
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.util.Log
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
@@ -62,7 +64,10 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         input.rewind()
 
         val output = ByteBuffer.allocateDirect(outputTensor.numBytes()).order(ByteOrder.nativeOrder())
+        val inferenceStarted = SystemClock.elapsedRealtime()
+        Log.i(TAG, "TFLITE_INFERENCE_START input_bytes=${inputTensor.numBytes()} output_bytes=${outputTensor.numBytes()} threads=2")
         interpreter.runForMultipleInputsOutputs(arrayOf(input), mapOf(outputIndex to output))
+        Log.i(TAG, "TFLITE_INFERENCE_DONE elapsed_ms=${SystemClock.elapsedRealtime() - inferenceStarted}")
         output.rewind()
 
         val enhancedSmall = IntArray(256 * 256)
@@ -151,4 +156,8 @@ class MaximEnhancer(context: Context) : AutoCloseable {
     }
 
     override fun close() = interpreter.close()
+
+    private companion object {
+        const val TAG = "AICameraMaxim"
+    }
 }
