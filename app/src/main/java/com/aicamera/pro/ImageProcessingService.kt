@@ -65,32 +65,38 @@ class ImageProcessingService : Service() {
             val file = if (generatedBenchmark) null else File(inputPath)
             try {
                 val mode = ColorEnhancer.Mode.valueOf(modeName)
-                updateProgress(if (generatedBenchmark) "Creating benchmark photo" else "Opening photo", 0, 0)
+                updateProgress(if (generatedBenchmark) "Creating benchmark photo" else "Opening photo", 2)
                 source = if (generatedBenchmark) createBenchmarkBitmap() else decodeInput(file!!)
+                updateProgress("Photo ready", 8)
                 output = when (mode) {
                     ColorEnhancer.Mode.VIVID -> {
-                        updateProgress("Enhancing vivid colors", 0, 0)
-                        ColorEnhancer.enhance(source, ColorEnhancer.Mode.VIVID)
+                        updateProgress("Enhancing vivid colors", 15)
+                        ColorEnhancer.enhance(source, ColorEnhancer.Mode.VIVID).also { updateProgress("Color enhancement complete", 82) }
                     }
                     ColorEnhancer.Mode.PORTRAIT -> {
-                        updateProgress("Loading portrait segmentation", 0, 0)
+                        updateProgress("Loading portrait segmentation", 12)
                         val segmenter = SelfiePersonSegmenter().also { selfie = it }
+                        updateProgress("Detecting portrait subject", 35)
                         val mask = segmenter.personMask(source)
-                        try { PortraitProcessor.apply(source, mask, strength) } finally { if (!mask.isRecycled) mask.recycle() }
+                        try { PortraitProcessor.apply(source, mask, strength).also { updateProgress("Portrait effect complete", 82) } } finally { if (!mask.isRecycled) mask.recycle() }
                     }
                     ColorEnhancer.Mode.AI -> processAi(source)
                 }
                 val saveStarted = SystemClock.elapsedRealtime()
                 updateProgress("Saving to Gallery", 0, 0)
+                updateProgress("Saving to Gallery", 96)
                 val uri = saveBitmap(output)
+                updateProgress("Photo saved", 100)
                 val saveMs = SystemClock.elapsedRealtime() - saveStarted
                 val totalMs = SystemClock.elapsedRealtime() - totalStarted
+                completeProgress("Photo saved to Pictures/AICamera3rd", true)
                 notifyFinished(true, "Photo saved to Pictures/AICamera3rd")
                 android.util.Log.i(TAG, "Processing complete: $uri")
                 if (benchmark) android.util.Log.i(TAG, "BENCHMARK_RESULT status=success mode=$modeName input=${if (generatedBenchmark) "synthetic" else "photo"} width=${source.width} height=${source.height} save_ms=$saveMs total_ms=$totalMs output=${uri.lastPathSegment}")
             } catch (t: Throwable) {
                 android.util.Log.e(TAG, "Image processing failed", t)
                 if (benchmark) android.util.Log.e(TAG, "BENCHMARK_RESULT status=failure elapsed_ms=${SystemClock.elapsedRealtime() - totalStarted} error=${t.javaClass.simpleName}: ${t.message}")
+                completeProgress(t.message ?: t.javaClass.simpleName, false)
                 notifyFinished(false, t.message ?: t.javaClass.simpleName)
             } finally {
                 if (output != null && output !== source && !output.isRecycled) output.recycle()
@@ -108,20 +114,27 @@ class ImageProcessingService : Service() {
 
     private fun processAi(source: Bitmap): Bitmap {
         val loadStarted = SystemClock.elapsedRealtime()
-        updateProgress("Loading offline AI models", 0, 0)
+        updateProgress("Loading offline AI models", 10)
         maxim = MaximEnhancer(this)
+        updateProgress("AI model ready", 25)
         android.util.Log.i(TAG, "BENCHMARK_STAGE model_load_ms=${SystemClock.elapsedRealtime() - loadStarted}")
         // NAFNet's 256px tiled CPU inference was taking many minutes per tile
         // on the CI emulator. Keep the learned MAXIM color/tone enhancement
         // and skip this non-essential denoising stage for a usable mobile path.
         val enhanceStarted = SystemClock.elapsedRealtime()
-        updateProgress("Enhancing colors", 0, 0)
-        val enhanced = maxim!!.enhance(source)
+        updateProgress("AI color model running", 30, true)
+        val enhanced = maxim!!.enhance(source) { row, total ->
+            if (row == total || row % 24 == 0) {
+                val percent = 55 + (row * 25 / total.coerceAtLeast(1))
+                updateProgress("Applying color enhancement", percent)
+            }
+        }
+        updateProgress("Color enhancement complete", 82)
         android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
         var sceneResult: Bitmap? = null
             try {
                 val refineStarted = SystemClock.elapsedRealtime()
-                updateProgress("Refining scene and face details", 0, 0)
+                updateProgress("Refining scene and face details", 88)
                 scene = try { SceneSegmenter(this) } catch (e: Exception) {
                     android.util.Log.w(TAG, "Optional scene segmentation unavailable", e)
                     null
@@ -230,12 +243,31 @@ class ImageProcessingService : Service() {
         wakeLock = null
     }
 
-    private fun updateProgress(title: String, done: Int, total: Int) {
-        val notification = buildNotification(title, done, total, true)
+    private fun updateProgress(title: String, percent: Int, indeterminate: Boolean = false) {
+        val safePercent = percent.coerceIn(0, 100)
+        getSharedPreferences(PROGRESS_PREFS, MODE_PRIVATE).edit()
+            .putBoolean("active", true).putString("title", title).putInt("percent", safePercent).apply()
+        sendProgressBroadcast(title, safePercent, true)
+        val notification = buildNotification(title, safePercent, 100, true, indeterminate)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification)
     }
 
-    private fun buildNotification(title: String, done: Int, total: Int, ongoing: Boolean): Notification {
+    private fun completeProgress(message: String, success: Boolean) {
+        val title = if (success) "Saved to Gallery" else "Processing failed"
+        getSharedPreferences(PROGRESS_PREFS, MODE_PRIVATE).edit()
+            .putBoolean("active", false).putString("title", title).putInt("percent", if (success) 100 else 0).apply()
+        sendProgressBroadcast(title, if (success) 100 else 0, false)
+    }
+
+    private fun sendProgressBroadcast(title: String, percent: Int, active: Boolean) {
+        sendBroadcast(Intent(ACTION_PROGRESS).setPackage(packageName).apply {
+            putExtra(EXTRA_PROGRESS_TITLE, title)
+            putExtra(EXTRA_PROGRESS_PERCENT, percent)
+            putExtra(EXTRA_PROGRESS_ACTIVE, active)
+        })
+    }
+
+    private fun buildNotification(title: String, done: Int, total: Int, ongoing: Boolean, indeterminate: Boolean = false): Notification {
         val openApp = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -248,8 +280,8 @@ class ImageProcessingService : Service() {
             .setOnlyAlertOnce(true)
             .setOngoing(ongoing)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-        if (total > 0) builder.setProgress(total, done, false)
-        else if (ongoing) builder.setProgress(0, 0, true)
+        if (indeterminate && ongoing) builder.setProgress(0, 0, true)
+        else if (total > 0) builder.setProgress(total, done, false)
         return builder.build()
     }
 
@@ -294,6 +326,11 @@ class ImageProcessingService : Service() {
         const val EXTRA_MODE = "com.aicamera.pro.extra.MODE"
         const val EXTRA_STRENGTH = "com.aicamera.pro.extra.STRENGTH"
         const val EXTRA_BENCHMARK = "com.aicamera.pro.extra.BENCHMARK"
+        const val ACTION_PROGRESS = "com.aicamera.pro.action.PROCESSING_PROGRESS"
+        const val EXTRA_PROGRESS_TITLE = "progress_title"
+        const val EXTRA_PROGRESS_PERCENT = "progress_percent"
+        const val EXTRA_PROGRESS_ACTIVE = "progress_active"
+        const val PROGRESS_PREFS = "processing_progress"
         private const val TAG = "AICameraProcessing"
         private const val CHANNEL_ID = "ai_photo_processing"
         private const val NOTIFICATION_ID = 4101
