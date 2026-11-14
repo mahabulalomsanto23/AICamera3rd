@@ -28,14 +28,22 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         require(inputShape.contentEquals(intArrayOf(1, 256, 256, 3))) {
             "Unexpected MAXIM input shape: ${inputShape.contentToString()}"
         }
-        val fullOutputIndex = (0 until interpreter.outputTensorCount).firstOrNull { index ->
+        // MAXIM exposes intermediate supervision outputs as well as its final prediction.
+        // Match the reference inference pipeline: use the LAST full-resolution RGB output.
+        val fullOutputIndices = (0 until interpreter.outputTensorCount).filter { index ->
             interpreter.getOutputTensor(index).shape().contentEquals(intArrayOf(1, 256, 256, 3))
         }
+        val fullOutputIndex = fullOutputIndices.lastOrNull()
         require(fullOutputIndex != null) {
             "MAXIM has no full-resolution output. Outputs: " +
                 (0 until interpreter.outputTensorCount).joinToString { interpreter.getOutputTensor(it).shape().contentToString() }
         }
         outputIndex = fullOutputIndex
+        Log.i(TAG, "MODEL_TENSORS input_type=${interpreter.getInputTensor(0).dataType()} outputs=" +
+            (0 until interpreter.outputTensorCount).joinToString { index ->
+                val tensor = interpreter.getOutputTensor(index)
+                "$index:${tensor.name()}:${tensor.shape().contentToString()}:${tensor.dataType()}"
+            } + " selected_output=$outputIndex")
     }
 
     fun enhance(source: Bitmap, onProgress: ((Int, Int) -> Unit)? = null): Bitmap {
@@ -49,15 +57,25 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         val outputTensor = interpreter.getOutputTensor(outputIndex)
         val input = ByteBuffer.allocateDirect(inputTensor.numBytes()).order(ByteOrder.nativeOrder())
         when (inputTensor.dataType()) {
-            DataType.UINT8 -> sourcePixels.forEach { c ->
-                input.put(((c shr 16) and 255).toByte())
-                input.put(((c shr 8) and 255).toByte())
-                input.put((c and 255).toByte())
-            }
+            // The published MAXIM FiveK inference pipeline converts RGB pixels to
+            // float [0, 1] before invoking the model. Feeding 0..255 floats here
+            // pushes the network far outside its training range and causes severe
+            // colour corruption.
             DataType.FLOAT32 -> sourcePixels.forEach { c ->
-                input.putFloat(((c shr 16) and 255).toFloat())
-                input.putFloat(((c shr 8) and 255).toFloat())
-                input.putFloat((c and 255).toFloat())
+                input.putFloat(((c shr 16) and 255) / 255f)
+                input.putFloat(((c shr 8) and 255) / 255f)
+                input.putFloat((c and 255) / 255f)
+            }
+            DataType.UINT8 -> {
+                val q = inputTensor.quantizationParams()
+                require(q.scale > 0f) { "MAXIM UINT8 input has invalid quantization scale: ${q.scale}" }
+                sourcePixels.forEach { c ->
+                    fun quantize(channel: Int): Byte =
+                        ((channel / 255f / q.scale) + q.zeroPoint).toInt().coerceIn(0, 255).toByte()
+                    input.put(quantize((c shr 16) and 255))
+                    input.put(quantize((c shr 8) and 255))
+                    input.put(quantize(c and 255))
+                }
             }
             else -> error("Unsupported MAXIM input type: ${inputTensor.dataType()}")
         }
@@ -72,27 +90,28 @@ class MaximEnhancer(context: Context) : AutoCloseable {
 
         val enhancedSmall = IntArray(256 * 256)
         when (outputTensor.dataType()) {
+            // MAXIM FiveK returns RGB values in [0, 1]. Convert back to
+            // 8-bit sRGB only after clipping, as in the reference implementation.
             DataType.UINT8 -> {
                 val q = outputTensor.quantizationParams()
+                require(q.scale > 0f) { "MAXIM UINT8 output has invalid quantization scale: ${q.scale}" }
                 for (i in enhancedSmall.indices) {
-                    val r = (((output.get().toInt() and 255) - q.zeroPoint) * q.scale).toInt().coerceIn(0, 255)
-                    val g = (((output.get().toInt() and 255) - q.zeroPoint) * q.scale).toInt().coerceIn(0, 255)
-                    val b = (((output.get().toInt() and 255) - q.zeroPoint) * q.scale).toInt().coerceIn(0, 255)
+                    fun dequantize(): Int {
+                        val raw = output.get().toInt() and 255
+                        val normalized = (raw - q.zeroPoint) * q.scale
+                        return (normalized.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+                    }
+                    val r = dequantize()
+                    val g = dequantize()
+                    val b = dequantize()
                     enhancedSmall[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                 }
             }
             DataType.FLOAT32 -> {
-                val values = FloatArray(256 * 256 * 3)
-                var maxValue = 0f
-                for (i in values.indices) {
-                    values[i] = output.float
-                    if (values[i] > maxValue) maxValue = values[i]
-                }
-                val scale = if (maxValue <= 1.5f) 255f else 1f
                 for (i in enhancedSmall.indices) {
-                    val r = (values[i * 3] * scale).toInt().coerceIn(0, 255)
-                    val g = (values[i * 3 + 1] * scale).toInt().coerceIn(0, 255)
-                    val b = (values[i * 3 + 2] * scale).toInt().coerceIn(0, 255)
+                    val r = (output.float.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+                    val g = (output.float.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+                    val b = (output.float.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
                     enhancedSmall[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                 }
             }
