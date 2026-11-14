@@ -67,7 +67,16 @@ class MainActivity : AppCompatActivity() {
             val title = intent.getStringExtra(ImageProcessingService.EXTRA_PROGRESS_TITLE) ?: "Processing"
             val percent = intent.getIntExtra(ImageProcessingService.EXTRA_PROGRESS_PERCENT, 0)
             val active = intent.getBooleanExtra(ImageProcessingService.EXTRA_PROGRESS_ACTIVE, false)
-            setStatus(if (active) "AI • $title • $percent%" else if (percent == 100) "SAVED • 100%" else "PROCESSING FAILED")
+            val compact = when (title) {
+                "Applying color enhancement", "AI color model running", "Enhancing vivid colors" -> "Enhancing"
+                "Refining scene and face details" -> "Refining"
+                "Loading offline AI models", "Loading portrait segmentation" -> "Loading"
+                "Detecting portrait subject" -> "Detecting"
+                "Saving to Gallery" -> "Saving"
+                "Photo ready", "AI model ready" -> "Ready"
+                else -> title
+            }
+            setStatus(if (active) "AI • $compact • $percent%" else if (percent == 100) "SAVED • 100%" else "PROCESSING FAILED")
         }
     }
 
