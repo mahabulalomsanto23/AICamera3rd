@@ -19,7 +19,8 @@ class MaximEnhancer(context: Context) : AutoCloseable {
 
     init {
         val modelBuffer = ModelAsset.map(context, "maxim_fivek_fp16.tflite")
-        val options = Interpreter.Options().apply { setNumThreads(4) }
+        // Limit CPU contention and temporary tensor pressure on Snapdragon 865.
+        val options = Interpreter.Options().apply { setNumThreads(2) }
         interpreter = Interpreter(modelBuffer, options)
         val inputShape = interpreter.getInputTensor(0).shape()
         require(inputShape.contentEquals(intArrayOf(1, 256, 256, 3))) {
