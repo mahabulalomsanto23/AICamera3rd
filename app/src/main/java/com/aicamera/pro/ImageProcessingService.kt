@@ -123,8 +123,9 @@ class ImageProcessingService : Service() {
         // additional full-resolution pixel buffers and are intentionally deferred to avoid memory spikes.
         val enhanceStarted = SystemClock.elapsedRealtime()
         updateProgress("AI color model running", 30, true)
+        val activeMaxim = maxim ?: throw IllegalStateException("MAXIM model is unavailable")
         return try {
-            maxim!!.enhance(source) { row, total ->
+            activeMaxim.enhance(source) { row, total ->
                 if (row == total || row % 24 == 0) {
                     val percent = 55 + (row * 35 / total.coerceAtLeast(1))
                     updateProgress("Applying AI color enhancement", percent)
@@ -136,6 +137,13 @@ class ImageProcessingService : Service() {
         } catch (t: Throwable) {
             android.util.Log.e(TAG, "MAXIM enhancement failed", t)
             throw t
+        } finally {
+            // Release the model immediately after its stage. If another model is
+            // added later, it must be initialized only after this close completes.
+            try { activeMaxim.close() } catch (closeError: Exception) {
+                android.util.Log.w(TAG, "MAXIM close failed", closeError)
+            }
+            if (maxim === activeMaxim) maxim = null
         }
     }
 
