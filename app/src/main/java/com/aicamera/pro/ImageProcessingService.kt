@@ -118,8 +118,7 @@ class ImageProcessingService : Service() {
         updateProgress("Enhancing colors", 0, 0)
         val enhanced = maxim!!.enhance(source)
         android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
-        try {
-            var sceneResult: Bitmap? = null
+        var sceneResult: Bitmap? = null
             try {
                 val refineStarted = SystemClock.elapsedRealtime()
                 updateProgress("Refining scene and face details", 0, 0)
@@ -142,9 +141,6 @@ class ImageProcessingService : Service() {
                 if (!enhanced.isRecycled) enhanced.recycle()
                 throw t
             }
-        } finally {
-            if (!denoised.isRecycled) denoised.recycle()
-        }
     }
 
     /**
