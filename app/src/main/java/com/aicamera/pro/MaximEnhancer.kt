@@ -157,9 +157,24 @@ class MaximEnhancer(context: Context) : AutoCloseable {
                         val b = ((i01 shr shift) and 255) * (1f - wx) + ((i11 shr shift) and 255) * wx
                         return (a * (1f - wy) + b * wy).toInt()
                     }
-                    val r = (((c shr 16) and 255) + residual(16) - 128).coerceIn(0, 255)
-                    val g = (((c shr 8) and 255) + residual(8) - 128).coerceIn(0, 255)
-                    val b = ((c and 255) + residual(0) - 128).coerceIn(0, 255)
+                    var r = (((c shr 16) and 255) + residual(16) - 128).coerceIn(0, 255)
+                    var g = (((c shr 8) and 255) + residual(8) - 128).coerceIn(0, 255)
+                    var b = ((c and 255) + residual(0) - 128).coerceIn(0, 255)
+
+                    // MAXIM FiveK favors restrained photographic retouching.
+                    // Add a gentle adaptive vibrance pass so muted colors are
+                    // visibly improved without heavily saturating already vivid
+                    // colors or pushing skin-like warm tones too far.
+                    val rf = r / 255f
+                    val gf = g / 255f
+                    val bf = b / 255f
+                    val luma = 0.2126f * rf + 0.7152f * gf + 0.0722f * bf
+                    val chroma = maxOf(rf, gf, bf) - minOf(rf, gf, bf)
+                    val warmSkinLike = rf > gf * 1.08f && gf > bf * 1.10f && luma in 0.18f..0.88f
+                    val vibrance = if (warmSkinLike) 1.06f else 1.16f + 0.08f * (1f - chroma)
+                    r = (luma * 255f + (r - luma * 255f) * vibrance).toInt().coerceIn(0, 255)
+                    g = (luma * 255f + (g - luma * 255f) * vibrance).toInt().coerceIn(0, 255)
+                    b = (luma * 255f + (b - luma * 255f) * vibrance).toInt().coerceIn(0, 255)
                     outRow[x] = (c and -0x1000000) or (r shl 16) or (g shl 8) or b
                 }
                 result.setPixels(outRow, 0, original.width, 0, y, original.width, 1)
