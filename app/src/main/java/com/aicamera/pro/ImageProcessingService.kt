@@ -258,8 +258,9 @@ class ImageProcessingService : Service() {
             small.getPixels(originalPixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)
             denoised.getPixels(cleanPixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)
 
-            // Apply a restrained 32% denoise residual to the original-resolution
-            // output. Row buffers keep peak memory nearly independent of photo size.
+            // Apply a very restrained 12% denoise residual to the original-resolution
+            // output. The stronger blend softened fine hair/fur and masonry texture
+            // in comparison photos; preserve MAXIM's original high-frequency detail.
             val width = input.width
             val height = input.height
             val baseRow = IntArray(width)
@@ -287,7 +288,7 @@ class ImageProcessingService : Service() {
                         val d11 = ((cleanPixels[i11] shr shift) and 255) - ((originalPixels[i11] shr shift) and 255)
                         val top = d00 * (1f - wx) + d10 * wx
                         val bottom = d01 * (1f - wx) + d11 * wx
-                        return (top * (1f - wy) + bottom * wy) * 0.32f
+                        return (top * (1f - wy) + bottom * wy) * 0.12f
                     }
                     val r = (((base shr 16) and 255) + correction(16)).toInt().coerceIn(0, 255)
                     val g = (((base shr 8) and 255) + correction(8)).toInt().coerceIn(0, 255)
@@ -296,7 +297,7 @@ class ImageProcessingService : Service() {
                 }
                 input.setPixels(outRow, 0, width, 0, y, width, 1)
             }
-            android.util.Log.i(TAG, "NAFNET_DONE size=${smallWidth}x${smallHeight} blend=0.32 elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            android.util.Log.i(TAG, "NAFNET_DONE size=${smallWidth}x${smallHeight} blend=0.12 elapsed_ms=${SystemClock.elapsedRealtime() - started}")
             return input
         } catch (e: Exception) {
             android.util.Log.w(TAG, "NAFNET_SKIPPED reason=${e.javaClass.simpleName}: ${e.message}", e)
