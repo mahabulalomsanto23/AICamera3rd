@@ -94,16 +94,35 @@ class SceneSegmenter(context: Context) : AutoCloseable {
             val r = (changed shr 16) and 255; val g = (changed shr 8) and 255; val b = changed and 255
             val luma = (0.2126f * r + 0.7152f * g + 0.0722f * b)
             val satBoost = when (cls) {
-                2 -> 1.10f                         // sky
-                4, 9, 17, 72 -> 1.12f             // trees, grass, plants and palms
-                66 -> 1.18f                       // flowers
-                92 -> 0.82f                       // apparel: protect original color
+                2 -> 1.06f                         // sky: restrained blue/cyan recovery
+                4, 9, 17, 72 -> 1.10f             // trees, grass, plants and palms
+                66 -> 1.12f                       // flowers
+                92, 12 -> 0.94f                  // apparel/person: protect natural color
                 else -> 1.0f
             }
-            val preserve = if (cls == 92) 0.22f else 0f
-            val rr = (luma + (r - luma) * satBoost).coerceIn(0f,255f) * (1f-preserve) + ((original shr 16) and 255) * preserve
-            val gg = (luma + (g - luma) * satBoost).coerceIn(0f,255f) * (1f-preserve) + ((original shr 8) and 255) * preserve
-            val bb = (luma + (b - luma) * satBoost).coerceIn(0f,255f) * (1f-preserve) + (original and 255) * preserve
+            // Scene-conditioned local-contrast recovery. Use the source luminance
+            // neighborhood as a high-pass guide, not global sharpening: buildings,
+            // roads and vegetation receive a restrained texture lift while sky,
+            // skin and clothing are protected from halos.
+            val detailGain = when (cls) {
+                1, 3, 6, 4, 9, 17, 72 -> 0.24f
+                2, 12, 92 -> 0.04f
+                else -> 0.12f
+            }
+            val sx = x.coerceIn(1, w - 2)
+            val sy = y.coerceIn(1, h - 2)
+            fun sourceLuma(pixel: Int): Float =
+                0.2126f * ((pixel shr 16) and 255) + 0.7152f * ((pixel shr 8) and 255) + 0.0722f * (pixel and 255)
+            val neighborhood = (sourceLuma(src[sy * w + sx - 1]) +
+                sourceLuma(src[sy * w + sx + 1]) +
+                sourceLuma(src[(sy - 1) * w + sx]) +
+                sourceLuma(src[(sy + 1) * w + sx])) * 0.25f
+            val sourceCenter = sourceLuma(original)
+            val detail = ((sourceCenter - neighborhood) * detailGain).coerceIn(-18f, 18f)
+            val preserve = if (cls == 92 || cls == 12) 0.28f else 0f
+            val rr = (luma + (r - luma) * satBoost + detail).coerceIn(0f,255f) * (1f-preserve) + ((original shr 16) and 255) * preserve
+            val gg = (luma + (g - luma) * satBoost + detail).coerceIn(0f,255f) * (1f-preserve) + ((original shr 8) and 255) * preserve
+            val bb = (luma + (b - luma) * satBoost + detail).coerceIn(0f,255f) * (1f-preserve) + (original and 255) * preserve
             dst[i] = (changed and -0x1000000) or (rr.toInt().coerceIn(0,255) shl 16) or
                 (gg.toInt().coerceIn(0,255) shl 8) or bb.toInt().coerceIn(0,255)
         }
