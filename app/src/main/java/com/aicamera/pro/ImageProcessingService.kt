@@ -89,6 +89,9 @@ class ImageProcessingService : Service() {
                     }
                     ColorEnhancer.Mode.AI -> processAi(source)
                 }
+                if (mode == ColorEnhancer.Mode.AI && output != null) {
+                    output = applyMemorySafeDenoise(output!!)
+                }
                 // MAXIM has produced a separate output bitmap. Drop the decoded
                 // source before JPEG encoding so both full-size bitmaps are not
                 // retained during the save stage.
@@ -171,6 +174,98 @@ class ImageProcessingService : Service() {
                 android.util.Log.w(TAG, "MAXIM close failed", closeError)
             }
             if (maxim === activeMaxim) maxim = null
+        }
+    }
+
+    /**
+     * Run NAFNet on a small working copy, then transfer only its low-frequency
+     * denoise correction to the full-size MAXIM result. This keeps source detail
+     * and avoids NAFNet's multi-array full-resolution memory cost on OnePlus 8.
+     */
+    private fun applyMemorySafeDenoise(input: Bitmap): Bitmap {
+        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        val info = android.app.ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        val availableMiB = info.availMem / (1024L * 1024L)
+        if (info.lowMemory || availableMiB < 2048L) {
+            android.util.Log.i(TAG, "NAFNET_SKIP low_memory=true available_mib=$availableMiB")
+            return input
+        }
+
+        val maxEdge = 768
+        val scale = minOf(1.0, maxEdge.toDouble() / maxOf(input.width, input.height))
+        val smallWidth = (input.width * scale).toInt().coerceAtLeast(1)
+        val smallHeight = (input.height * scale).toInt().coerceAtLeast(1)
+        var small: Bitmap? = null
+        var denoised: Bitmap? = null
+        var active: NafNetDenoiser? = null
+        val started = SystemClock.elapsedRealtime()
+        try {
+            updateProgress("AI noise reduction • preparing", 92)
+            small = Bitmap.createScaledBitmap(input, smallWidth, smallHeight, true)
+            active = NafNetDenoiser(this)
+            denoiser = active
+            denoised = active.denoise(small) { done, total ->
+                if (done == total || done % 2 == 0) {
+                    updateProgress("AI noise reduction • $done/$total", 92 + (done * 3 / total.coerceAtLeast(1)))
+                }
+            }
+
+            val count = smallWidth * smallHeight
+            val originalPixels = IntArray(count)
+            val cleanPixels = IntArray(count)
+            small.getPixels(originalPixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)
+            denoised.getPixels(cleanPixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)
+
+            // Apply a restrained 32% denoise residual to the original-resolution
+            // output. Row buffers keep peak memory nearly independent of photo size.
+            val width = input.width
+            val height = input.height
+            val baseRow = IntArray(width)
+            val outRow = IntArray(width)
+            for (y in 0 until height) {
+                input.getPixels(baseRow, 0, width, 0, y, width, 1)
+                val fy = (y * (smallHeight - 1).toFloat() / maxOf(1, height - 1)).coerceIn(0f, (smallHeight - 1).toFloat())
+                val y0 = fy.toInt()
+                val y1 = (y0 + 1).coerceAtMost(smallHeight - 1)
+                val wy = fy - y0
+                for (x in 0 until width) {
+                    val fx = (x * (smallWidth - 1).toFloat() / maxOf(1, width - 1)).coerceIn(0f, (smallWidth - 1).toFloat())
+                    val x0 = fx.toInt()
+                    val x1 = (x0 + 1).coerceAtMost(smallWidth - 1)
+                    val wx = fx - x0
+                    val i00 = y0 * smallWidth + x0
+                    val i10 = y0 * smallWidth + x1
+                    val i01 = y1 * smallWidth + x0
+                    val i11 = y1 * smallWidth + x1
+                    val base = baseRow[x]
+                    fun correction(shift: Int): Float {
+                        val d00 = ((cleanPixels[i00] shr shift) and 255) - ((originalPixels[i00] shr shift) and 255)
+                        val d10 = ((cleanPixels[i10] shr shift) and 255) - ((originalPixels[i10] shr shift) and 255)
+                        val d01 = ((cleanPixels[i01] shr shift) and 255) - ((originalPixels[i01] shr shift) and 255)
+                        val d11 = ((cleanPixels[i11] shr shift) and 255) - ((originalPixels[i11] shr shift) and 255)
+                        val top = d00 * (1f - wx) + d10 * wx
+                        val bottom = d01 * (1f - wx) + d11 * wx
+                        return (top * (1f - wy) + bottom * wy) * 0.32f
+                    }
+                    val r = (((base shr 16) and 255) + correction(16)).toInt().coerceIn(0, 255)
+                    val g = (((base shr 8) and 255) + correction(8)).toInt().coerceIn(0, 255)
+                    val b = ((base and 255) + correction(0)).toInt().coerceIn(0, 255)
+                    outRow[x] = (base and -0x1000000) or (r shl 16) or (g shl 8) or b
+                }
+                input.setPixels(outRow, 0, width, 0, y, width, 1)
+            }
+            android.util.Log.i(TAG, "NAFNET_DONE size=${smallWidth}x${smallHeight} blend=0.32 elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            return input
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "NAFNET_SKIPPED reason=${e.javaClass.simpleName}: ${e.message}", e)
+            return input
+        } finally {
+            try { active?.close() } catch (_: Exception) {}
+            if (denoiser === active) denoiser = null
+            if (denoised != null && !denoised.isRecycled) denoised.recycle()
+            if (small != null && small !== input && !small.isRecycled) small.recycle()
+            System.gc()
         }
     }
 
