@@ -156,12 +156,14 @@ class SceneSegmenter(context: Context) : AutoCloseable {
                 .coerceIn(0f, 255f)
 
             // Local contrast is guided by original detail. Avoid halos on sky, skin and fabric.
-            val sx = x.coerceIn(1, w - 2)
-            val sy = y.coerceIn(1, h - 2)
             val centerY = sourceY[i]
-            val neighborhood = (sourceY[sy * w + sx - 1] + sourceY[sy * w + sx + 1] +
-                sourceY[(sy - 1) * w + sx] + sourceY[(sy + 1) * w + sx]) * 0.25f
-            val detail = ((centerY - neighborhood) * detailGain).coerceIn(-14f, 14f)
+            val detail = if (w >= 3 && h >= 3) {
+                val sx = x.coerceIn(1, w - 2)
+                val sy = y.coerceIn(1, h - 2)
+                val neighborhood = (sourceY[sy * w + sx - 1] + sourceY[sy * w + sx + 1] +
+                    sourceY[(sy - 1) * w + sx] + sourceY[(sy + 1) * w + sx]) * 0.25f
+                ((centerY - neighborhood) * detailGain).coerceIn(-14f, 14f)
+            } else 0f
 
             // Scale chroma around the newly toned luminance, preserving hue and
             // preventing a simple saturation-only look.
