@@ -147,34 +147,75 @@ class ImageProcessingService : Service() {
         updateProgress("AI model ready", 25)
         android.util.Log.i(TAG, "BENCHMARK_STAGE model_load_ms=${SystemClock.elapsedRealtime() - loadStarted}")
 
-        // NAFNet remains bypassed: its tiled CPU inference is not yet suitable for this device path.
-        // Run only MAXIM during stabilization. Scene segmentation and face refinement each allocate
-        // additional full-resolution pixel buffers and are intentionally deferred to avoid memory spikes.
+        // Execute neural stages sequentially: MAXIM -> ADE20K scene-aware tuning -> face preservation.
+        // Each optional stage has a memory gate and a fail-open path so the OnePlus 8
+        // keeps the last valid image instead of crashing or returning to Home.
         val enhanceStarted = SystemClock.elapsedRealtime()
-        updateProgress("AI color model running", 30, true)
+        updateProgress("AI photo enhancement", 30, true)
         val activeMaxim = maxim ?: throw IllegalStateException("MAXIM model is unavailable")
-        return try {
+        var current = try {
             activeMaxim.enhance(source) { row, total ->
                 if (row == total || row % 24 == 0) {
-                    val percent = 55 + (row * 35 / total.coerceAtLeast(1))
-                    updateProgress("Applying AI color enhancement", percent)
+                    val percent = 45 + (row * 35 / total.coerceAtLeast(1))
+                    updateProgress("AI tone and color analysis", percent)
                 }
-            }.also {
-                logMemory("after_inference")
-                updateProgress("AI enhancement complete", 92)
-                android.util.Log.i(TAG, "BENCHMARK_STAGE maxim_enhance_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
             }
         } catch (t: Throwable) {
             android.util.Log.e(TAG, "MAXIM enhancement failed", t)
             throw t
         } finally {
-            // Release the model immediately after its stage. If another model is
-            // added later, it must be initialized only after this close completes.
             try { activeMaxim.close() } catch (closeError: Exception) {
                 android.util.Log.w(TAG, "MAXIM close failed", closeError)
             }
             if (maxim === activeMaxim) maxim = null
         }
+
+        val memory = android.app.ActivityManager.MemoryInfo()
+        (getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(memory)
+        val availableMiB = memory.availMem / (1024L * 1024L)
+        if (!memory.lowMemory && availableMiB >= 1800L) {
+            var segmenter: SceneSegmenter? = null
+            try {
+                updateProgress("Understanding scene regions", 82)
+                segmenter = SceneSegmenter(this)
+                val sceneOutput = segmenter.apply(source, current)
+                if (sceneOutput !== current) {
+                    if (!current.isRecycled) current.recycle()
+                    current = sceneOutput
+                }
+                android.util.Log.i(TAG, "SCENE_AWARE_DONE classes=ADE20K")
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "SCENE_AWARE_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
+            } finally {
+                try { segmenter?.close() } catch (_: Exception) {}
+                scene = null
+                System.gc()
+            }
+
+            var faceProtector: FaceProtector? = null
+            try {
+                updateProgress("Protecting natural face details", 86)
+                faceProtector = FaceProtector()
+                val faceOutput = faceProtector.protect(source, current)
+                if (faceOutput !== current) {
+                    if (!current.isRecycled) current.recycle()
+                    current = faceOutput
+                }
+                android.util.Log.i(TAG, "FACE_PRESERVATION_DONE")
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "FACE_PRESERVATION_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
+            } finally {
+                try { faceProtector?.close() } catch (_: Exception) {}
+                faces = null
+                System.gc()
+            }
+        } else {
+            android.util.Log.i(TAG, "SCENE_FACE_SKIP available_mib=$availableMiB low_memory=${memory.lowMemory}")
+        }
+        logMemory("after_ai_stages")
+        updateProgress("AI enhancement complete", 92)
+        android.util.Log.i(TAG, "BENCHMARK_STAGE ai_pipeline_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
+        return current
     }
 
     /**
