@@ -24,7 +24,7 @@ class SceneSegmenter(context: Context) : AutoCloseable {
 
     init {
         val modelBuffer = ModelAsset.map(context, "deeplabv3_ade20k.tflite")
-        interpreter = Interpreter(modelBuffer, Interpreter.Options().apply { setNumThreads(4) })
+        interpreter = Interpreter(modelBuffer, Interpreter.Options().apply { setNumThreads(2) })
         val ins = interpreter.getInputTensor(0).shape()
         val outs = interpreter.getOutputTensor(0).shape()
         require(ins.size == 4 && ins[0] == 1 && ins[3] == 3) { "Unsupported segmentation input: ${ins.contentToString()}" }
