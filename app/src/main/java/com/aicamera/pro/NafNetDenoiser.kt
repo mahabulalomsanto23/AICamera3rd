@@ -11,7 +11,7 @@ import java.nio.ByteOrder
 import kotlin.math.max
 import kotlin.math.min
 
-/** NAFNet-SIDD width-32 local denoiser. Uses overlapping 256px tiles. */
+/** NAFNet-SIDD width-32 local denoiser. Uses overlapping 256px tiles with a low CPU thread count for mobile thermals. */
 class NafNetDenoiser(context: Context) : AutoCloseable {
     private val interpreter: Interpreter
 
@@ -19,7 +19,7 @@ class NafNetDenoiser(context: Context) : AutoCloseable {
         // Use the CPU backend for device compatibility. Map the bundled model
         // directly instead of copying it to internal storage on first use.
         val modelBuffer = ModelAsset.map(context, "nafnet_sidd_width32_fp16.tflite")
-        interpreter = Interpreter(modelBuffer, Interpreter.Options().apply { setNumThreads(4) })
+        interpreter = Interpreter(modelBuffer, Interpreter.Options().apply { setNumThreads(2) })
         require(interpreter.getInputTensor(0).shape().contentEquals(intArrayOf(1, 3, 256, 256))) {
             "Unexpected NAFNet input: ${interpreter.getInputTensor(0).shape().contentToString()}"
         }
