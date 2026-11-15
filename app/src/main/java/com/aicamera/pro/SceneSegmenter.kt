@@ -86,43 +86,92 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         val w = enhanced.width; val h = enhanced.height
         val src = IntArray(w * h); val dst = IntArray(w * h)
         source.getPixels(src, 0, w, 0, 0, w, h); enhanced.getPixels(dst, 0, w, 0, 0, w, h)
+
+        // Precompute source luminance once. Besides being faster on Snapdragon 865,
+        // this gives the detail pass a stable reference that is not affected by MAXIM.
+        val sourceY = FloatArray(w * h)
+        for (i in src.indices) {
+            val p = src[i]
+            sourceY[i] = 0.2126f * ((p shr 16) and 255) +
+                0.7152f * ((p shr 8) and 255) + 0.0722f * (p and 255)
+        }
+
         for (y in 0 until h) for (x in 0 until w) {
             val cls = labels[(y * outputH / h).coerceIn(0, outputH - 1) * outputW +
                 (x * outputW / w).coerceIn(0, outputW - 1)]
             val i = y * w + x
             val original = src[i]; val changed = dst[i]
             val r = (changed shr 16) and 255; val g = (changed shr 8) and 255; val b = changed and 255
-            val luma = (0.2126f * r + 0.7152f * g + 0.0722f * b)
-            val satBoost = when (cls) {
-                2 -> 1.06f                         // sky: restrained blue/cyan recovery
-                4, 9, 17, 72 -> 1.10f             // trees, grass, plants and palms
-                66 -> 1.12f                       // flowers
-                92, 12 -> 0.94f                  // apparel/person: protect natural color
-                else -> 1.0f
+            val luma = 0.2126f * r + 0.7152f * g + 0.0722f * b
+
+            // Semantic photographic profiles: exposure/contrast and chroma are
+            // selected by the detected object, not applied as one global filter.
+            // Values are deliberately restrained to avoid neon greens or cyan skies.
+            val saturation: Float
+            val contrast: Float
+            val exposure: Float
+            val detailGain: Float
+            val preserveOriginal: Float
+            when (cls) {
+                2 -> { // sky: protect highlights, gently restore blue/cyan
+                    saturation = 1.075f; contrast = 1.035f; exposure = 1.0f
+                    detailGain = 0.015f; preserveOriginal = 0.04f
+                }
+                4, 9, 17, 72 -> { // trees, grass, plants
+                    saturation = 1.105f; contrast = 1.055f; exposure = 1.5f
+                    detailGain = 0.22f; preserveOriginal = 0.02f
+                }
+                66 -> { // flowers: richer but not clipped
+                    saturation = 1.12f; contrast = 1.025f; exposure = 0.5f
+                    detailGain = 0.08f; preserveOriginal = 0.02f
+                }
+                12 -> { // people: natural skin, softer contrast, no saturation push
+                    saturation = 0.985f; contrast = 1.015f; exposure = 1.0f
+                    detailGain = 0.025f; preserveOriginal = 0.34f
+                }
+                92 -> { // clothing: retain fabric color
+                    saturation = 1.015f; contrast = 1.025f; exposure = 0.5f
+                    detailGain = 0.045f; preserveOriginal = 0.22f
+                }
+                1, 6 -> { // buildings and roads: recover midtone structure
+                    saturation = 1.025f; contrast = 1.075f; exposure = 1.0f
+                    detailGain = 0.20f; preserveOriginal = 0.0f
+                }
+                21 -> { // water
+                    saturation = 1.065f; contrast = 1.04f; exposure = 0.5f
+                    detailGain = 0.07f; preserveOriginal = 0.02f
+                }
+                else -> {
+                    saturation = 1.035f; contrast = 1.045f; exposure = 0.75f
+                    detailGain = 0.11f; preserveOriginal = 0.04f
+                }
             }
-            // Scene-conditioned local-contrast recovery. Use the source luminance
-            // neighborhood as a high-pass guide, not global sharpening: buildings,
-            // roads and vegetation receive a restrained texture lift while sky,
-            // skin and clothing are protected from halos.
-            val detailGain = when (cls) {
-                1, 3, 6, 4, 9, 17, 72 -> 0.24f
-                2, 12, 92 -> 0.04f
-                else -> 0.12f
-            }
+
+            // Adaptive shadow lift and highlight roll-off keep dark regions readable
+            // while retaining sky/cloud detail. Midtones get the strongest contrast.
+            val normalizedY = luma / 255f
+            val shadowLift = if (normalizedY < 0.28f) (0.28f - normalizedY) * 5.0f else 0f
+            val highlightCompression = if (normalizedY > 0.78f) (normalizedY - 0.78f) * 3.0f else 0f
+            val tonedY = (((luma - 127.5f) * contrast) + 127.5f + exposure + shadowLift - highlightCompression)
+                .coerceIn(0f, 255f)
+
+            // Local contrast is guided by original detail. Avoid halos on sky, skin and fabric.
             val sx = x.coerceIn(1, w - 2)
             val sy = y.coerceIn(1, h - 2)
-            fun sourceLuma(pixel: Int): Float =
-                0.2126f * ((pixel shr 16) and 255) + 0.7152f * ((pixel shr 8) and 255) + 0.0722f * (pixel and 255)
-            val neighborhood = (sourceLuma(src[sy * w + sx - 1]) +
-                sourceLuma(src[sy * w + sx + 1]) +
-                sourceLuma(src[(sy - 1) * w + sx]) +
-                sourceLuma(src[(sy + 1) * w + sx])) * 0.25f
-            val sourceCenter = sourceLuma(original)
-            val detail = ((sourceCenter - neighborhood) * detailGain).coerceIn(-18f, 18f)
-            val preserve = if (cls == 92 || cls == 12) 0.28f else 0f
-            val rr = (luma + (r - luma) * satBoost + detail).coerceIn(0f,255f) * (1f-preserve) + ((original shr 16) and 255) * preserve
-            val gg = (luma + (g - luma) * satBoost + detail).coerceIn(0f,255f) * (1f-preserve) + ((original shr 8) and 255) * preserve
-            val bb = (luma + (b - luma) * satBoost + detail).coerceIn(0f,255f) * (1f-preserve) + (original and 255) * preserve
+            val centerY = sourceY[i]
+            val neighborhood = (sourceY[sy * w + sx - 1] + sourceY[sy * w + sx + 1] +
+                sourceY[(sy - 1) * w + sx] + sourceY[(sy + 1) * w + sx]) * 0.25f
+            val detail = ((centerY - neighborhood) * detailGain).coerceIn(-14f, 14f)
+
+            // Scale chroma around the newly toned luminance, preserving hue and
+            // preventing a simple saturation-only look.
+            val rr0 = tonedY + (r - luma) * saturation + detail
+            val gg0 = tonedY + (g - luma) * saturation + detail
+            val bb0 = tonedY + (b - luma) * saturation + detail
+            val preserve = preserveOriginal
+            val rr = rr0 * (1f - preserve) + ((original shr 16) and 255) * preserve
+            val gg = gg0 * (1f - preserve) + ((original shr 8) and 255) * preserve
+            val bb = bb0 * (1f - preserve) + (original and 255) * preserve
             dst[i] = (changed and -0x1000000) or (rr.toInt().coerceIn(0,255) shl 16) or
                 (gg.toInt().coerceIn(0,255) shl 8) or bb.toInt().coerceIn(0,255)
         }
