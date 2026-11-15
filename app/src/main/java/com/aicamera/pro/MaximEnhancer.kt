@@ -2,6 +2,8 @@ package com.aicamera.pro
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.os.SystemClock
 import android.util.Log
 import org.tensorflow.lite.DataType
@@ -48,10 +50,23 @@ class MaximEnhancer(context: Context) : AutoCloseable {
 
     fun enhance(source: Bitmap, onProgress: ((Int, Int) -> Unit)? = null): Bitmap {
         val original = if (source.config == Bitmap.Config.ARGB_8888) source else source.copy(Bitmap.Config.ARGB_8888, false)
-        val small = Bitmap.createScaledBitmap(original, 256, 256, true)
+        // Preserve aspect ratio before fixed-square neural inference. Stretching
+        // portraits and landscapes to 256x256 distorts faces and scene geometry.
+        val modelScale = minOf(256f / original.width, 256f / original.height)
+        val fittedWidth = (original.width * modelScale).toInt().coerceIn(1, 256)
+        val fittedHeight = (original.height * modelScale).toInt().coerceIn(1, 256)
+        val padLeft = (256 - fittedWidth) / 2
+        val padTop = (256 - fittedHeight) / 2
+        val fitted = Bitmap.createScaledBitmap(original, fittedWidth, fittedHeight, true)
+        val small = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+        Canvas(small).apply {
+            drawColor(android.graphics.Color.rgb(127, 127, 127))
+            drawBitmap(fitted, padLeft.toFloat(), padTop.toFloat(), Paint(Paint.FILTER_BITMAP_FLAG))
+        }
+        if (fitted !== original && !fitted.isRecycled) fitted.recycle()
         val sourcePixels = IntArray(256 * 256)
         small.getPixels(sourcePixels, 0, 256, 0, 0, 256, 256)
-        if (small !== original && !small.isRecycled) small.recycle()
+        if (!small.isRecycled) small.recycle()
 
         val inputTensor = interpreter.getInputTensor(0)
         val outputTensor = interpreter.getOutputTensor(outputIndex)
@@ -138,12 +153,12 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         try {
             for (y in 0 until original.height) {
                 original.getPixels(baseRow, 0, original.width, 0, y, original.width, 1)
-                val fy = (y * 255f / maxOf(1, original.height - 1)).coerceIn(0f, 255f)
+                val fy = (padTop + y * modelScale).coerceIn(0f, 255f)
                 val y0 = fy.toInt()
                 val y1 = (y0 + 1).coerceAtMost(255)
                 val wy = fy - y0
                 for (x in 0 until original.width) {
-                    val fx = (x * 255f / maxOf(1, original.width - 1)).coerceIn(0f, 255f)
+                    val fx = (padLeft + x * modelScale).coerceIn(0f, 255f)
                     val x0 = fx.toInt()
                     val x1 = (x0 + 1).coerceAtMost(255)
                     val wx = fx - x0
@@ -171,7 +186,9 @@ class MaximEnhancer(context: Context) : AutoCloseable {
                     val luma = 0.2126f * rf + 0.7152f * gf + 0.0722f * bf
                     val chroma = maxOf(rf, gf, bf) - minOf(rf, gf, bf)
                     val warmSkinLike = rf > gf * 1.08f && gf > bf * 1.10f && luma in 0.18f..0.88f
-                    val vibrance = if (warmSkinLike) 1.06f else 1.16f + 0.08f * (1f - chroma)
+                    // Prevent the overly saturated look seen in earlier builds.
+                    // MAXIM provides the main grade; this is only a restrained lift.
+                    val vibrance = if (warmSkinLike) 1.025f else 1.045f + 0.035f * (1f - chroma)
                     r = (luma * 255f + (r - luma * 255f) * vibrance).toInt().coerceIn(0, 255)
                     g = (luma * 255f + (g - luma * 255f) * vibrance).toInt().coerceIn(0, 255)
                     b = (luma * 255f + (b - luma * 255f) * vibrance).toInt().coerceIn(0, 255)
