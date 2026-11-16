@@ -299,16 +299,6 @@ class MainActivity : AppCompatActivity() {
             updateModeUi()
             setStatus("VIVID • COLOR ENHANCEMENT")
         }
-        aiModeButton = modeChip("AI", true) {
-            mode = ColorEnhancer.Mode.AI
-            updateModeUi()
-            setStatus("AI • OFFLINE MODELS LOAD ON FIRST CAPTURE")
-        }
-        vividModeButton = modeChip("VIVID", false) {
-            mode = ColorEnhancer.Mode.VIVID
-            updateModeUi()
-            setStatus("VIVID • COLOR ENHANCEMENT")
-        }
         modeRow.addView(aiModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(5) })
         modeRow.addView(vividModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(5) })
         bottomPanel.addView(modeRow, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(12) })
