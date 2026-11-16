@@ -144,7 +144,9 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                 }
                 top += stride
             }
-            Log.i(TAG, "UPSCALE_DONE input=${w}x$h output=${outW}x$outH tiles=$total elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            val detailStarted = SystemClock.elapsedRealtime()
+            restoreSourceDetail(source, result)
+            Log.i(TAG, "UPSCALE_DONE input=${w}x$h output=${outW}x$outH tiles=$total inference_ms=$inferenceMs detail_ms=${SystemClock.elapsedRealtime() - detailStarted} elapsed_ms=${SystemClock.elapsedRealtime() - started} thread_count=2")
             return result
         } catch (t: Throwable) {
             if (!result.isRecycled) result.recycle()
@@ -152,6 +154,46 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
         }
     }
 
+    /**
+     * Reintroduce restrained source high-frequency structure after SR. This helps
+     * hair, fur, leaves and masonry retain edge character without strong sharpening.
+     */
+    private fun restoreSourceDetail(source: Bitmap, output: Bitmap) {
+        val sw = source.width
+        val sh = source.height
+        val ow = output.width
+        val rowCenter = IntArray(sw)
+        val rowAbove = IntArray(sw)
+        val rowBelow = IntArray(sw)
+        val outputRow = IntArray(ow)
+        for (y in 0 until output.height) {
+            val sy = (y / 2).coerceIn(0, sh - 1)
+            source.getPixels(rowCenter, 0, sw, 0, sy, sw, 1)
+            source.getPixels(rowAbove, 0, sw, 0, (sy - 1).coerceAtLeast(0), sw, 1)
+            source.getPixels(rowBelow, 0, sw, 0, (sy + 1).coerceAtMost(sh - 1), sw, 1)
+            output.getPixels(outputRow, 0, ow, 0, y, ow, 1)
+            for (x in 0 until ow) {
+                val sx = (x / 2).coerceIn(0, sw - 1)
+                val center = rowCenter[sx]
+                val left = rowCenter[(sx - 1).coerceAtLeast(0)]
+                val right = rowCenter[(sx + 1).coerceAtMost(sw - 1)]
+                val up = rowAbove[sx]
+                val down = rowBelow[sx]
+                fun edge(shift: Int): Float {
+                    val c = (center shr shift) and 255
+                    val n = (((left shr shift) and 255) + ((right shr shift) and 255) +
+                        ((up shr shift) and 255) + ((down shr) and 255)) * 0.25f
+                    return (c - n).coerceIn(-12f, 12f)
+                }
+                val base = outputRow[x]
+                val r = (((base shr 16) and 255) + edge(16) * 0.22f).toInt().coerceIn(0, 255)
+                val g = (((base shr 8) and 255) + edge(8) * 0.22f).toInt().coerceIn(0, 255)
+                val b = ((base and 255) + edge(0) * 0.22f).toInt().coerceIn(0, 255)
+                outputRow[x] = (base and -0x1000000) or (r shl 16) or (g shl 8) or b
+            }
+            output.setPixels(outputRow, 0, ow, 0, y, ow, 1)
+        }
+    }
     override fun close() = interpreter.close()
 
     companion object {
