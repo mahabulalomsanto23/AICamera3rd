@@ -23,14 +23,17 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: app/src/main/assets
-          key: aicamera3rd-ai-models-v1-${{ hashFiles('tools/convert_maxim_fivek.py', 'tools/download_extra_models.py') }}
+          key: aicamera3rd-ai-models-v2-${{ hashFiles('tools/convert_maxim_fivek.py', 'tools/download_extra_models.py', 'tools/export_rlfn_ntire2024.py') }}
       - name: Download and convert models (cache miss only)
         if: steps.ai-model-cache.outputs.cache-hit != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install tensorflow-cpu==2.15.1 huggingface_hub==0.26.5
+          pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install onnx==1.17.0 onnxruntime==1.20.1
           python tools/convert_maxim_fivek.py
           python tools/download_extra_models.py
+          python tools/export_rlfn_ntire2024.py
       - name: Validate offline model bundle
         run: |
           python - <<'PY'
@@ -40,13 +43,15 @@ jobs:
               Path("app/src/main/assets/nafnet_sidd_width32_fp16.tflite"),
               Path("app/src/main/assets/deeplabv3_ade20k.tflite"),
               Path("app/src/main/assets/realesrgan_general_x4v3.tflite"),
+              Path("app/src/main/assets/rlfn_ntire2024_x4.onnx"),
           ]
           for model in models:
-              if not model.is_file() or model.stat().st_size < 1024 * 1024:
+              minimum_size = 500 * 1024 if model.suffix == ".onnx" else 1024 * 1024
+              if not model.is_file() or model.stat().st_size < minimum_size:
                   raise SystemExit(f"Missing or unexpectedly small model: {model}")
               with model.open("rb") as stream:
                   header = stream.read(8)
-              if header[4:8] != b"TFL3":
+              if model.suffix == ".tflite" and header[4:8] != b"TFL3":
                   raise SystemExit(f"Invalid TFLite FlatBuffer header: {model}")
               print(f"OK {model}: {model.stat().st_size:,} bytes")
           PY
@@ -55,7 +60,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: app/src/main/assets
-          key: aicamera3rd-ai-models-v1-${{ hashFiles('tools/convert_maxim_fivek.py', 'tools/download_extra_models.py') }}
+          key: aicamera3rd-ai-models-v2-${{ hashFiles('tools/convert_maxim_fivek.py', 'tools/download_extra_models.py', 'tools/export_rlfn_ntire2024.py') }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

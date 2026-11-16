@@ -42,7 +42,7 @@ android {
             isMinifyEnabled = false
         }
     }
-    androidResources { noCompress += "tflite" }
+    androidResources { noCompress += listOf("tflite", "onnx") }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -59,6 +59,8 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.1")
     implementation("org.tensorflow:tensorflow-lite:2.15.0")
     implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.15.0")
+    // CPU-only local inference for the NTIRE 2024 RLFN super-resolution model.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     // Bundled on-device face detector; no first-run model download or photo upload.
     implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
