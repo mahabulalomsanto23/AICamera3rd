@@ -29,13 +29,12 @@ internal class RlfnEnhancer(context: Context) : AutoCloseable {
 
     init {
         val mappedModel = ModelAsset.map(context, "rlfn_ntire2024_x4.onnx")
-        val modelBytes = ByteArray(mappedModel.remaining()).also { mappedModel.get(it) }
         val options = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(2)
             setInterOpNumThreads(1)
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         }
-        session = environment.createSession(modelBytes, options)
+        session = environment.createSession(mappedModel, options)
         inputName = session.inputNames.first()
         val inputInfo = session.inputInfo[inputName]?.info as? ai.onnxruntime.TensorInfo
             ?: error("RLFN input tensor metadata is unavailable")
