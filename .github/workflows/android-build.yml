@@ -125,6 +125,7 @@ jobs:
             ${{ steps.apk.outputs.name }}
             ${{ steps.apk.outputs.name }}.sha256
       - name: Publish latest APK release
+        if: env.ANDROID_SIGNING_CONFIGURED == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APK_NAME: ${{ steps.apk.outputs.name }}
