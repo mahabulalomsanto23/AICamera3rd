@@ -11,8 +11,8 @@ import kotlin.math.min
 
 /**
  * Bundled ML Kit face detector used as a preservation stage after MAXIM.
- * It blends a restrained amount of the source face back into the enhanced
- * result, protecting identity cues and natural skin color from over-processing.
+ * It preserves identity and natural skin color while transferring restrained
+ * high-frequency facial texture from the source into the enhanced result.
  * Detection runs locally; no image is uploaded.
  */
 class FaceProtector : AutoCloseable {
@@ -65,16 +65,32 @@ class FaceProtector : AutoCloseable {
                     // Soft elliptical mask: strongest preservation at face center,
                     // feathered toward the boundary to avoid visible rectangular edges.
                     val mask = ((1f - distance) / 0.35f).coerceIn(0f, 1f)
-                    val originalWeight = 0.34f * mask
+                    val originalWeight = 0.20f * mask
                     val index = y * width + x
                     val src = originalPixels[index]
                     val dst = outputPixels[index]
-                    val r = ((((dst shr 16) and 255) * (1f - originalWeight)) +
-                        (((src shr 16) and 255) * originalWeight)).toInt().coerceIn(0, 255)
-                    val g = ((((dst shr 8) and 255) * (1f - originalWeight)) +
-                        (((src shr 8) and 255) * originalWeight)).toInt().coerceIn(0, 255)
-                    val b = (((dst and 255) * (1f - originalWeight)) +
-                        ((src and 255) * originalWeight)).toInt().coerceIn(0, 255)
+                    // Transfer only restrained high-frequency source detail. This
+                    // restores pores, eyebrow/hair edges and facial definition
+                    // without inventing facial features or changing identity.
+                    val sx = x.coerceIn(1, width - 2)
+                    val sy = y.coerceIn(1, height - 2)
+                    fun channel(pixel: Int, shift: Int) = (pixel shr shift) and 255
+                    fun detail(shift: Int): Float {
+                        val center = channel(originalPixels[index], shift)
+                        val neighbors = (
+                            channel(originalPixels[sy * width + sx - 1], shift) +
+                            channel(originalPixels[sy * width + sx + 1], shift) +
+                            channel(originalPixels[(sy - 1) * width + sx], shift) +
+                            channel(originalPixels[(sy + 1) * width + sx], shift)
+                        ) * 0.25f
+                        return ((center - neighbors) * 0.42f * mask).coerceIn(-10f, 10f)
+                    }
+                    val r = (((((dst shr 16) and 255) * (1f - originalWeight)) +
+                        (((src shr 16) and 255) * originalWeight)) + detail(16)).toInt().coerceIn(0, 255)
+                    val g = (((((dst shr 8) and 255) * (1f - originalWeight)) +
+                        (((src shr 8) and 255) * originalWeight)) + detail(8)).toInt().coerceIn(0, 255)
+                    val b = ((((dst and 255) * (1f - originalWeight)) +
+                        ((src and 255) * originalWeight)) + detail(0)).toInt().coerceIn(0, 255)
                     outputPixels[index] = (dst and -0x1000000) or (r shl 16) or (g shl 8) or b
                 }
             }
