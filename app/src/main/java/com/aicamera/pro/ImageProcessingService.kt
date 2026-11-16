@@ -91,6 +91,7 @@ class ImageProcessingService : Service() {
                 }
                 if (mode == ColorEnhancer.Mode.AI && output != null) {
                     output = applyMemorySafeDenoise(output!!)
+                    output = applyMemorySafeSuperResolution(output!!)
                 }
                 // MAXIM has produced a separate output bitmap. Drop the decoded
                 // source before JPEG encoding so both full-size bitmaps are not
@@ -307,6 +308,43 @@ class ImageProcessingService : Service() {
             if (denoiser === active) denoiser = null
             if (denoised != null && !denoised.isRecycled) denoised.recycle()
             if (small != null && small !== input && !small.isRecycled) small.recycle()
+            System.gc()
+        }
+    }
+
+    /**
+     * Run tiled Real-ESRGAN only when memory and source dimensions permit.
+     * It creates a true 2x image (4x model output reduced to 2x), not a
+     * bitmap resize or edge-sharpening approximation.
+     */
+    private fun applyMemorySafeSuperResolution(input: Bitmap): Bitmap {
+        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        val info = android.app.ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        val availableMiB = info.availMem / (1024L * 1024L)
+        val pixels = input.width.toLong() * input.height.toLong()
+        if (info.lowMemory || availableMiB < 2500L || pixels > 6_000_000L) {
+            android.util.Log.i(TAG, "REAL_ESRGAN_SKIP available_mib=$availableMiB low_memory=${info.lowMemory} pixels=$pixels")
+            return input
+        }
+        var enhancer: RealEsrganEnhancer? = null
+        val started = SystemClock.elapsedRealtime()
+        try {
+            updateProgress("AI super resolution • loading model", 95)
+            enhancer = RealEsrganEnhancer(this)
+            val result = enhancer.enhance(input) { done, total ->
+                if (done == total || done % 4 == 0) {
+                    updateProgress("AI super resolution • $done/$total", 95 + (done * 2 / total.coerceAtLeast(1)))
+                }
+            }
+            if (result !== input && !input.isRecycled) input.recycle()
+            android.util.Log.i(TAG, "REAL_ESRGAN_DONE elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            return result
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "REAL_ESRGAN_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
+            return input
+        } finally {
+            try { enhancer?.close() } catch (_: Exception) {}
             System.gc()
         }
     }
