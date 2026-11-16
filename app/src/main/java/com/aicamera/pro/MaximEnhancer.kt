@@ -48,7 +48,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
             } + " selected_output=$outputIndex")
     }
 
-    fun enhance(source: Bitmap, onProgress: ((Int, Int) -> Unit)? = null): Bitmap {
+    fun enhance(source: Bitmap, strength: Float = 0.72f, onProgress: ((Int, Int) -> Unit)? = null): Bitmap {
         val original = if (source.config == Bitmap.Config.ARGB_8888) source else source.copy(Bitmap.Config.ARGB_8888, false)
         // Preserve aspect ratio before fixed-square neural inference. Stretching
         // portraits and landscapes to 256x256 distorts faces and scene geometry.
@@ -136,6 +136,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
         // Transfer the learned color/tone residual without allocating multiple
         // full-resolution IntArrays. The old implementation held two large pixel
         // arrays plus two full-size bitmaps at once, which could OOM on 8GB phones.
+        val effectStrength = strength.coerceIn(0f, 1f)
         val deltaPixels = IntArray(enhancedSmall.size)
         for (i in deltaPixels.indices) {
             val a = sourcePixels[i]
@@ -170,7 +171,7 @@ class MaximEnhancer(context: Context) : AutoCloseable {
                     fun residual(shift: Int): Int {
                         val a = ((i00 shr shift) and 255) * (1f - wx) + ((i10 shr shift) and 255) * wx
                         val b = ((i01 shr shift) and 255) * (1f - wx) + ((i11 shr shift) and 255) * wx
-                        return (a * (1f - wy) + b * wy).toInt()
+                        return (128f + (a * (1f - wy) + b * wy - 128f) * effectStrength).toInt()
                     }
                     var r = (((c shr 16) and 255) + residual(16) - 128).coerceIn(0, 255)
                     var g = (((c shr 8) and 255) + residual(8) - 128).coerceIn(0, 255)
