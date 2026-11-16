@@ -83,3 +83,26 @@ extract_tflite(seg_archive, seg_model)
 seg_archive.unlink(missing_ok=True)
 smoke(seg_model, expected_input=[1, 512, 512, 3], min_classes=100)
 print("NAFNet and ADE20K model download + CPU smoke inference passed")
+
+# Qualcomm Real-ESRGAN-General-x4v3 (BSD-3-Clause), exported TFLite float.
+# This is a real 4x restoration/upscaling network, not a sharpening filter.
+esr_archive = ASSETS / "real_esrgan_general_x4v3-tflite-float.zip"
+esr_model = ASSETS / "realesrgan_general_x4v3.tflite"
+fetch(
+    "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/real_esrgan_general_x4v3/releases/v0.66.0/real_esrgan_general_x4v3-tflite-float.zip",
+    esr_archive,
+)
+with zipfile.ZipFile(esr_archive) as z:
+    candidates = [n for n in z.namelist() if n.lower().endswith(".tflite")]
+    if not candidates:
+        raise RuntimeError("Qualcomm Real-ESRGAN archive contains no TFLite model")
+    esr_model.write_bytes(z.read(candidates[0]))
+esr_archive.unlink(missing_ok=True)
+esr_in, esr_out = smoke(esr_model)
+in_shape = list(esr_in)
+out_shape = list(esr_out)
+# Qualcomm's model is exported for 128x128 RGB input and 4x output.
+if 128 not in in_shape or 512 not in out_shape:
+    raise RuntimeError(f"Unexpected Real-ESRGAN tensor shapes: {in_shape} -> {out_shape}")
+print("Real-ESRGAN-General-x4v3 model download + CPU smoke inference passed")
+
