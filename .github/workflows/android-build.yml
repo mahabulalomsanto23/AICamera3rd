@@ -39,6 +39,7 @@ jobs:
               Path("app/src/main/assets/maxim_fivek_fp16.tflite"),
               Path("app/src/main/assets/nafnet_sidd_width32_fp16.tflite"),
               Path("app/src/main/assets/deeplabv3_ade20k.tflite"),
+              Path("app/src/main/assets/realesrgan_general_x4v3.tflite"),
           ]
           for model in models:
               if not model.is_file() or model.stat().st_size < 1024 * 1024:
