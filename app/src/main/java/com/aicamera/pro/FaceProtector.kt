@@ -40,6 +40,9 @@ class FaceProtector : AutoCloseable {
 
         val width = source.width
         val height = source.height
+        // The edge-detail kernel samples a 3x3 neighborhood. Tiny thumbnails
+        // cannot support that safely, so preserve the valid enhanced image.
+        if (width < 3 || height < 3) return enhanced
         val originalPixels = IntArray(width * height)
         val outputPixels = IntArray(width * height)
         source.getPixels(originalPixels, 0, width, 0, 0, width, height)
