@@ -5,7 +5,8 @@ The checkpoint is the official 0.317M-parameter RLFN baseline. It expects RGB
 values in [0,255], takes 128x128 patches, and produces 4x output patches.
 """
 from pathlib import Path
-import urllib.request\nimport hashlib
+import urllib.request
+import hashlib
 
 import numpy as np
 import onnx
