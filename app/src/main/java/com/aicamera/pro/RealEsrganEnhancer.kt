@@ -63,11 +63,15 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
         val input = ByteBuffer.allocateDirect(tile * tile * 3 * 4).order(ByteOrder.nativeOrder())
         val output = ByteBuffer.allocateDirect(tile * 4 * tile * 4 * 3 * 4).order(ByteOrder.nativeOrder())
         val patch = IntArray(tile * tile)
+        val sourceRow = IntArray(tile)
         val rgb = IntArray(tile * 4 * tile * 4)
+        val canvas = android.graphics.Canvas(result)
+        val drawPaint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
         val totalX = (w + stride - 1) / stride
         val totalY = (h + stride - 1) / stride
         val total = totalX * totalY
         var done = 0
+        var inferenceMs = 0L
         val started = SystemClock.elapsedRealtime()
         try {
             var top = 0
@@ -75,10 +79,18 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                 var left = 0
                 while (left < w) {
                     input.clear()
-                    for (y in 0 until tile) for (x in 0 until tile) {
-                        val sx = (left + x - overlap).coerceIn(0, w - 1)
-                        val sy = (top + y - overlap).coerceIn(0, h - 1)
-                        patch[y * tile + x] = source.getPixel(sx, sy)
+                    // Read one contiguous source row per tile row instead of
+                    // 16,384 getPixel JNI calls per tile. Clamp-pad edge pixels.
+                    val sourceX0 = (left - overlap).coerceAtLeast(0)
+                    val sourceX1 = (left - overlap + tile).coerceAtMost(w)
+                    val validWidth = (sourceX1 - sourceX0).coerceAtLeast(1)
+                    for (y in 0 until tile) {
+                        val sourceY = (top + y - overlap).coerceIn(0, h - 1)
+                        source.getPixels(sourceRow, 0, validWidth, sourceX0, sourceY, validWidth, 1)
+                        for (x in 0 until tile) {
+                            val sourceX = (left + x - overlap).coerceIn(0, w - 1)
+                            patch[y * tile + x] = sourceRow[(sourceX - sourceX0).coerceIn(0, validWidth - 1)]
+                        }
                     }
                     if (inputNhwc) {
                         for (p in patch) {
@@ -92,7 +104,9 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                     }
                     input.rewind()
                     output.clear()
+                    val inferenceStarted = SystemClock.elapsedRealtime()
                     interpreter.run(input, output)
+                    inferenceMs += SystemClock.elapsedRealtime() - inferenceStarted
                     output.rewind()
                     if (outputNhwc) {
                         for (i in rgb.indices) {
@@ -120,7 +134,7 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                     val copyH = minOf(stride, h - top)
                     val dst = Rect(left * 2, top * 2, (left + copyW) * 2, (top + copyH) * 2)
                     val srcRect = Rect(0, 0, copyW * 2, copyH * 2)
-                    android.graphics.Canvas(result).drawBitmap(small, srcRect, dst, null)
+                    canvas.drawBitmap(small, srcRect, dst, drawPaint)
                     if (small !== crop && !small.isRecycled) small.recycle()
                     if (!crop.isRecycled) crop.recycle()
                     if (!tileBitmap.isRecycled) tileBitmap.recycle()
