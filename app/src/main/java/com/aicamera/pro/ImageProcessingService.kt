@@ -348,13 +348,14 @@ class ImageProcessingService : Service() {
         val availableMiB = info.availMem / (1024L * 1024L)
         val pixels = input.width.toLong() * input.height.toLong()
         val thermal = currentThermalStatus()
-        // Real-ESRGAN is the hottest and most memory-intensive stage. Scale its
-        // workload down under warm conditions and skip it before Android throttles
-        // the whole camera pipeline.
-        val thermalBudgetExceeded = thermal >= android.os.PowerManager.THERMAL_STATUS_MODERATE
+        // The previous 2MP/2500MiB/moderate-thermal gate silently skipped
+        // Real-ESRGAN for most full-resolution OnePlus 8 photos. Decode is now
+        // bounded to ~1.5MP, so allow the real SR model to run in normal and
+        // moderately warm conditions; stop only when memory/thermal risk is real.
+        val thermalBudgetExceeded = thermal >= android.os.PowerManager.THERMAL_STATUS_SEVERE
         val warmDeviceBudgetExceeded = thermal == android.os.PowerManager.THERMAL_STATUS_LIGHT &&
-            (availableMiB < 3200L || pixels > 1_000_000L)
-        if (info.lowMemory || availableMiB < 2500L || pixels > 2_000_000L ||
+            availableMiB < 2400L
+        if (info.lowMemory || availableMiB < 2200L || pixels > 1_500_000L ||
             thermalBudgetExceeded || warmDeviceBudgetExceeded) {
             android.util.Log.i(TAG, "REAL_ESRGAN_SKIP available_mib=$availableMiB low_memory=${info.lowMemory} pixels=$pixels thermal=${thermalLabel(thermal)}")
             return input
@@ -408,17 +409,17 @@ class ImageProcessingService : Service() {
         val info = android.app.ActivityManager.MemoryInfo()
         manager.getMemoryInfo(info)
         val availableMiB = info.availMem / (1024L * 1024L)
-        // OnePlus 8 has enough headroom for a substantially larger working
-        // image. Keep a conservative fallback on devices reporting low memory,
-        // but avoid the previous 640-1024px cap that visibly softened output.
+        // Keep the working image below Real-ESRGAN's 1.5MP safe budget.
+        // This is deliberate: the old 1792px decode produced >2MP 4:3 images,
+        // causing the SR model to be skipped on the very photos that needed it.
         val thermal = currentThermalStatus()
         val edge = when {
             manager.isLowRamDevice || availableMiB < 1536L || thermal >= android.os.PowerManager.THERMAL_STATUS_SEVERE -> 1024
-            thermal >= android.os.PowerManager.THERMAL_STATUS_MODERATE || availableMiB < 2304L -> 1280
-            thermal == android.os.PowerManager.THERMAL_STATUS_LIGHT || availableMiB < 3072L -> 1536
-            else -> 1792
+            thermal >= android.os.PowerManager.THERMAL_STATUS_MODERATE || availableMiB < 2304L -> 1152
+            thermal == android.os.PowerManager.THERMAL_STATUS_LIGHT || availableMiB < 2800L -> 1280
+            else -> 1400
         }
-        android.util.Log.i(TAG, "AI_MEMORY_IMAGE_SIZE available_mib=$availableMiB low_ram=${manager.isLowRamDevice} thermal=${thermalLabel(thermal)} max_edge=$edge")
+        android.util.Log.i(TAG, "AI_MEMORY_IMAGE_SIZE available_mib=$availableMiB low_ram=${manager.isLowRamDevice} thermal=${thermalLabel(thermal)} max_edge=$edge sr_budget_pixels=1500000")
         return edge
     }
 
