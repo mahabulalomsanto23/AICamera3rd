@@ -63,15 +63,46 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build ABI-specific debug APKs with bundled neural model
+      - name: Configure persistent APK signing (one-time repository secrets)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
         run: |
-          gradle assembleDebug
-          test -s app/build/outputs/apk/debug/app-x86_64-debug.apk
-          test -s app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
-          ls -lh app/build/outputs/apk/debug/*.apk
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/aicamera-release.jks"
+            echo "ANDROID_SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/aicamera-release.jks" >> "$GITHUB_ENV"
+            echo "ANDROID_SIGNING_STORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_SIGNING_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_SIGNING_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_SIGNING_CONFIGURED=true" >> "$GITHUB_ENV"
+            echo "Persistent release signing configured."
+          else
+            echo "ANDROID_SIGNING_CONFIGURED=false" >> "$GITHUB_ENV"
+            echo "::warning::Persistent signing secrets are not configured. This fallback debug APK cannot reliably update an installation signed by another runner."
+          fi
+      - name: Build ABI-specific APKs with bundled neural model
+        run: |
+          if [ "$ANDROID_SIGNING_CONFIGURED" = "true" ]; then
+            gradle assembleRelease
+            APK_DIR="app/build/outputs/apk/release"
+            APK_NAME="app-arm64-v8a-release.apk"
+            test -s "$APK_DIR/$APK_NAME"
+            test -s "$APK_DIR/app-x86_64-release.apk"
+          else
+            gradle assembleDebug
+            APK_DIR="app/build/outputs/apk/debug"
+            APK_NAME="app-arm64-v8a-debug.apk"
+            test -s "$APK_DIR/$APK_NAME"
+            test -s "$APK_DIR/app-x86_64-debug.apk"
+          fi
+          echo "APK_DIR=$APK_DIR" >> "$GITHUB_ENV"
+          echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
+          ls -lh "$APK_DIR"/*.apk
       - name: Verify APK signature and archive integrity
         run: |
-          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk"
+          APK="$GITHUB_WORKSPACE/$APK_DIR/$APK_NAME"
           test -f "$APK"
           zip -T "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
@@ -84,7 +115,7 @@ jobs:
         run: |
           STAMP=$(TZ=Asia/Dhaka date +'%Y%m%d-%H%M%S-BD')
           NAME="AI-Camera-Pro-OnePlus8-${STAMP}.apk"
-          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk "$NAME"
+          cp "$APK_DIR/$APK_NAME" "$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           sha256sum "$NAME" > "$NAME.sha256"
       - uses: actions/upload-artifact@v4
