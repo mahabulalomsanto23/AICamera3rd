@@ -1,0 +1,147 @@
+package com.aicamera.pro
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Rect
+import android.os.SystemClock
+import android.util.Log
+import org.tensorflow.lite.DataType
+import org.tensorflow.lite.Interpreter
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * Qualcomm Real-ESRGAN-General-x4v3, executed locally with TFLite CPU.
+ * The network predicts 4x detail; we produce a practical 2x output by
+ * downsampling its 4x tile, reducing memory versus a full 4x photograph.
+ */
+class RealEsrganEnhancer(context: Context) : AutoCloseable {
+    private val interpreter: Interpreter
+    private val inputShape: IntArray
+    private val outputShape: IntArray
+    private val inputNhwc: Boolean
+    private val outputNhwc: Boolean
+    private val tile = 128
+    private val overlap = 8
+    private val stride = tile - overlap * 2
+
+    init {
+        val model = ModelAsset.map(context, "realesrgan_general_x4v3.tflite")
+        interpreter = Interpreter(model, Interpreter.Options().apply { setNumThreads(2) })
+        inputShape = interpreter.getInputTensor(0).shape()
+        outputShape = interpreter.getOutputTensor(0).shape()
+        require(inputShape.size == 4 && inputShape[0] == 1) { "Unsupported Real-ESRGAN input: ${inputShape.contentToString()}" }
+        require(outputShape.size == 4 && outputShape[0] == 1) { "Unsupported Real-ESRGAN output: ${outputShape.contentToString()}" }
+        inputNhwc = inputShape[3] == 3
+        outputNhwc = outputShape[3] == 3
+        val ih = if (inputNhwc) inputShape[1] else inputShape[2]
+        val iw = if (inputNhwc) inputShape[2] else inputShape[3]
+        val oh = if (outputNhwc) outputShape[1] else outputShape[2]
+        val ow = if (outputNhwc) outputShape[2] else outputShape[3]
+        require(iw == tile && ih == tile && ow == tile * 4 && oh == tile * 4) {
+            "Unexpected Real-ESRGAN scale: ${inputShape.contentToString()} -> ${outputShape.contentToString()}"
+        }
+        require(interpreter.getInputTensor(0).dataType() == DataType.FLOAT32 &&
+            interpreter.getOutputTensor(0).dataType() == DataType.FLOAT32) {
+            "Real-ESRGAN float model required"
+        }
+        Log.i(TAG, "MODEL_READY input=${inputShape.contentToString()} output=${outputShape.contentToString()} layout=${if(inputNhwc) "NHWC" else "NCHW"}")
+    }
+
+    /** Returns a 2x bitmap, or the original bitmap when the photo exceeds safe limits. */
+    fun enhance(source: Bitmap, onProgress: ((Int, Int) -> Unit)? = null): Bitmap {
+        val w = source.width
+        val h = source.height
+        if (w.toLong() * h.toLong() > MAX_INPUT_PIXELS) {
+            Log.i(TAG, "SKIP image_too_large width=$w height=$h")
+            return source
+        }
+        val outW = Math.multiplyExact(w, 2)
+        val outH = Math.multiplyExact(h, 2)
+        val result = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        val input = ByteBuffer.allocateDirect(tile * tile * 3 * 4).order(ByteOrder.nativeOrder())
+        val output = ByteBuffer.allocateDirect(tile * 4 * tile * 4 * 3 * 4).order(ByteOrder.nativeOrder())
+        val patch = IntArray(tile * tile)
+        val rgb = IntArray(tile * 4 * tile * 4)
+        val totalX = (w + stride - 1) / stride
+        val totalY = (h + stride - 1) / stride
+        val total = totalX * totalY
+        var done = 0
+        val started = SystemClock.elapsedRealtime()
+        try {
+            var top = 0
+            while (top < h) {
+                var left = 0
+                while (left < w) {
+                    input.clear()
+                    for (y in 0 until tile) for (x in 0 until tile) {
+                        val sx = (left + x - overlap).coerceIn(0, w - 1)
+                        val sy = (top + y - overlap).coerceIn(0, h - 1)
+                        patch[y * tile + x] = source.getPixel(sx, sy)
+                    }
+                    if (inputNhwc) {
+                        for (p in patch) {
+                            input.putFloat(((p shr 16) and 255) / 255f)
+                            input.putFloat(((p shr 8) and 255) / 255f)
+                            input.putFloat((p and 255) / 255f)
+                        }
+                    } else {
+                        for (shift in intArrayOf(16, 8, 0)) for (p in patch)
+                            input.putFloat(((p shr shift) and 255) / 255f)
+                    }
+                    input.rewind()
+                    output.clear()
+                    interpreter.run(input, output)
+                    output.rewind()
+                    if (outputNhwc) {
+                        for (i in rgb.indices) {
+                            val r = (output.float.coerceIn(0f, 1f) * 255f).toInt()
+                            val g = (output.float.coerceIn(0f, 1f) * 255f).toInt()
+                            val b = (output.float.coerceIn(0f, 1f) * 255f).toInt()
+                            rgb[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                        }
+                    } else {
+                        val planes = Array(3) { FloatArray(rgb.size) }
+                        for (channel in 0..2) for (i in rgb.indices)
+                            planes[channel][i] = output.float.coerceIn(0f, 1f)
+                        for (i in rgb.indices) {
+                            val r = (planes[0][i] * 255f).toInt()
+                            val g = (planes[1][i] * 255f).toInt()
+                            val b = (planes[2][i] * 255f).toInt()
+                            rgb[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                        }
+                    }
+                    val tileBitmap = Bitmap.createBitmap(rgb, tile * 4, tile * 4, Bitmap.Config.ARGB_8888)
+                    val crop = Bitmap.createBitmap(tileBitmap, overlap * 4, overlap * 4,
+                        stride * 4, stride * 4)
+                    val small = Bitmap.createScaledBitmap(crop, stride * 2, stride * 2, true)
+                    val copyW = minOf(stride, w - left)
+                    val copyH = minOf(stride, h - top)
+                    val dst = Rect(left * 2, top * 2, (left + copyW) * 2, (top + copyH) * 2)
+                    val srcRect = Rect(0, 0, copyW * 2, copyH * 2)
+                    android.graphics.Canvas(result).drawBitmap(small, srcRect, dst, null)
+                    if (small !== crop && !small.isRecycled) small.recycle()
+                    if (!crop.isRecycled) crop.recycle()
+                    if (!tileBitmap.isRecycled) tileBitmap.recycle()
+                    done++
+                    onProgress?.invoke(done, total)
+                    left += stride
+                }
+                top += stride
+            }
+            Log.i(TAG, "UPSCALE_DONE input=${w}x$h output=${outW}x$outH tiles=$total elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            return result
+        } catch (t: Throwable) {
+            if (!result.isRecycled) result.recycle()
+            throw t
+        }
+    }
+
+    override fun close() = interpreter.close()
+
+    companion object {
+        private const val TAG = "AICameraRealESRGAN"
+        private const val MAX_INPUT_PIXELS = 6_000_000L
+    }
+}
