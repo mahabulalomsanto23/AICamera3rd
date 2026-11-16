@@ -77,6 +77,7 @@ class MainActivity : AppCompatActivity() {
                 setStatus("AI • $compact • $percent%")
             } else {
                 setBusy(false, if (percent == 100) "SAVED • Pictures/AICamera3rd" else "PROCESSING FAILED")
+                if (percent == 100) openPendingComparison()
                 if (galleryProcessing && !isFinishing) {
                     galleryProcessing = false
                     startCamera()
@@ -125,6 +126,7 @@ class MainActivity : AppCompatActivity() {
             progressReceiverRegistered = true
         }
         val progress = getSharedPreferences(ImageProcessingService.PROGRESS_PREFS, MODE_PRIVATE)
+        if (!progress.getBoolean("active", false)) openPendingComparison()
         if (progress.getBoolean("active", false)) {
             val title = progress.getString("title", "Processing") ?: "Processing"
             val percent = progress.getInt("percent", 0)
@@ -660,6 +662,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Open the newest photo saved by this app in the phone's image viewer. */
+    private fun openPendingComparison() {
+        val prefs = getSharedPreferences(ImageProcessingService.PROGRESS_PREFS, MODE_PRIVATE)
+        if (!prefs.getBoolean("comparison_pending", false)) return
+        val original = prefs.getString("comparison_original", null)
+        val enhanced = prefs.getString("comparison_enhanced", null)
+        if (original.isNullOrBlank() || enhanced.isNullOrBlank() ||
+            !File(original).isFile || !File(enhanced).isFile) {
+            prefs.edit().putBoolean("comparison_pending", false).apply()
+            return
+        }
+        // Consume the pending flag before launch so rotation/resume cannot open duplicates.
+        prefs.edit().putBoolean("comparison_pending", false).apply()
+        startActivity(Intent(this, ComparisonActivity::class.java).apply {
+            putExtra(ComparisonActivity.EXTRA_ORIGINAL, original)
+            putExtra(ComparisonActivity.EXTRA_ENHANCED, enhanced)
+        })
+    }
+
     private fun openCapturedPhotos() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             toast("Captured photos are saved in Pictures/AICamera3rd")
