@@ -93,6 +93,11 @@ class ImageProcessingService : Service() {
                     output = applyMemorySafeDenoise(output!!)
                     output = applyMemorySafeSuperResolution(output!!)
                 }
+                // Keep an on-device before/after pair for the comparison viewer.
+                // Cache copies are written before source/output bitmaps are released.
+                if (!generatedBenchmark && source != null && output != null) {
+                    saveComparisonPair(source!!, output!!)
+                }
                 // MAXIM has produced a separate output bitmap. Drop the decoded
                 // source before JPEG encoding so both full-size bitmaps are not
                 // retained during the save stage.
@@ -460,6 +465,37 @@ class ImageProcessingService : Service() {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }) ?: throw IOException("Could not decode selected photo")
+    }
+
+
+    private fun saveComparisonPair(original: Bitmap, enhanced: Bitmap) {
+        val dir = File(cacheDir, "latest_comparison").apply { mkdirs() }
+        val originalFile = File(dir, "original.jpg")
+        val enhancedFile = File(dir, "enhanced.jpg")
+        try {
+            originalFile.outputStream().buffered().use { stream ->
+                if (!original.compress(Bitmap.CompressFormat.JPEG, 94, stream)) {
+                    throw IOException("Could not encode original comparison image")
+                }
+            }
+            enhancedFile.outputStream().buffered().use { stream ->
+                if (!enhanced.compress(Bitmap.CompressFormat.JPEG, 94, stream)) {
+                    throw IOException("Could not encode enhanced comparison image")
+                }
+            }
+            getSharedPreferences(PROGRESS_PREFS, MODE_PRIVATE).edit()
+                .putString("comparison_original", originalFile.absolutePath)
+                .putString("comparison_enhanced", enhancedFile.absolutePath)
+                .putBoolean("comparison_pending", true)
+                .apply()
+            android.util.Log.i(TAG, "COMPARISON_READY original_bytes=${originalFile.length()} enhanced_bytes=${enhancedFile.length()}")
+        } catch (t: Throwable) {
+            originalFile.delete()
+            enhancedFile.delete()
+            getSharedPreferences(PROGRESS_PREFS, MODE_PRIVATE).edit()
+                .putBoolean("comparison_pending", false).apply()
+            android.util.Log.w(TAG, "COMPARISON_CACHE_SKIPPED reason=${t.message}", t)
+        }
     }
 
     private fun saveBitmap(bitmap: Bitmap): Uri {
