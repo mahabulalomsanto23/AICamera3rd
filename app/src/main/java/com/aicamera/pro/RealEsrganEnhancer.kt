@@ -182,7 +182,7 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                 fun edge(shift: Int): Float {
                     val c = (center shr shift) and 255
                     val n = (((left shr shift) and 255) + ((right shr shift) and 255) +
-                        ((up shr shift) and 255) + ((down shr) and 255)) * 0.25f
+                        ((up shr shift) and 255) + ((down shr shift) and 255)) * 0.25f
                     return (c - n).coerceIn(-12f, 12f)
                 }
                 val base = outputRow[x]
