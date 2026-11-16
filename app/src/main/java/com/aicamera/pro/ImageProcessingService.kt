@@ -167,8 +167,10 @@ class ImageProcessingService : Service() {
                 }
             }
         } catch (t: Throwable) {
-            android.util.Log.e(TAG, "MAXIM enhancement failed", t)
-            throw t
+            // Fail open to the decoded original rather than losing the photo or
+            // crashing the foreground service if the model exhausts native memory.
+            android.util.Log.e(TAG, "MAXIM_FAILED_USING_ORIGINAL reason=${t.javaClass.simpleName}: ${t.message}", t)
+            return source
         } finally {
             try { activeMaxim.close() } catch (closeError: Exception) {
                 android.util.Log.w(TAG, "MAXIM close failed", closeError)
@@ -247,8 +249,10 @@ class ImageProcessingService : Service() {
         val info = android.app.ActivityManager.MemoryInfo()
         manager.getMemoryInfo(info)
         val availableMiB = info.availMem / (1024L * 1024L)
-        if (info.lowMemory || availableMiB < 2048L) {
-            android.util.Log.i(TAG, "NAFNET_SKIP low_memory=true available_mib=$availableMiB")
+        val thermal = currentThermalStatus()
+        if (info.lowMemory || availableMiB < 2048L || thermal >= android.os.PowerManager.THERMAL_STATUS_MODERATE ||
+            (thermal == android.os.PowerManager.THERMAL_STATUS_LIGHT && availableMiB < 2816L)) {
+            android.util.Log.i(TAG, "NAFNET_SKIP low_memory=${info.lowMemory} available_mib=$availableMiB thermal=${thermalLabel(thermal)}")
             return input
         }
 
@@ -318,8 +322,8 @@ class ImageProcessingService : Service() {
             }
             android.util.Log.i(TAG, "NAFNET_DONE size=${smallWidth}x${smallHeight} blend=0.12 elapsed_ms=${SystemClock.elapsedRealtime() - started}")
             return input
-        } catch (e: Exception) {
-            android.util.Log.w(TAG, "NAFNET_SKIPPED reason=${e.javaClass.simpleName}: ${e.message}", e)
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "NAFNET_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
             return input
         } finally {
             try { active?.close() } catch (_: Exception) {}
@@ -341,8 +345,16 @@ class ImageProcessingService : Service() {
         manager.getMemoryInfo(info)
         val availableMiB = info.availMem / (1024L * 1024L)
         val pixels = input.width.toLong() * input.height.toLong()
-        if (info.lowMemory || availableMiB < 2500L || pixels > 6_000_000L) {
-            android.util.Log.i(TAG, "REAL_ESRGAN_SKIP available_mib=$availableMiB low_memory=${info.lowMemory} pixels=$pixels")
+        val thermal = currentThermalStatus()
+        // Real-ESRGAN is the hottest and most memory-intensive stage. Scale its
+        // workload down under warm conditions and skip it before Android throttles
+        // the whole camera pipeline.
+        val thermalBudgetExceeded = thermal >= android.os.PowerManager.THERMAL_STATUS_MODERATE
+        val warmDeviceBudgetExceeded = thermal == android.os.PowerManager.THERMAL_STATUS_LIGHT &&
+            (availableMiB < 3200L || pixels > 1_000_000L)
+        if (info.lowMemory || availableMiB < 2500L || pixels > 2_000_000L ||
+            thermalBudgetExceeded || warmDeviceBudgetExceeded) {
+            android.util.Log.i(TAG, "REAL_ESRGAN_SKIP available_mib=$availableMiB low_memory=${info.lowMemory} pixels=$pixels thermal=${thermalLabel(thermal)}")
             return input
         }
         var enhancer: RealEsrganEnhancer? = null
@@ -356,7 +368,7 @@ class ImageProcessingService : Service() {
                 }
             }
             if (result !== input && !input.isRecycled) input.recycle()
-            android.util.Log.i(TAG, "REAL_ESRGAN_DONE elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            android.util.Log.i(TAG, "REAL_ESRGAN_DONE elapsed_ms=${SystemClock.elapsedRealtime() - started} available_mib=$availableMiB thermal=${thermalLabel(thermal)}")
             return result
         } catch (t: Throwable) {
             android.util.Log.w(TAG, "REAL_ESRGAN_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
@@ -397,14 +409,35 @@ class ImageProcessingService : Service() {
         // OnePlus 8 has enough headroom for a substantially larger working
         // image. Keep a conservative fallback on devices reporting low memory,
         // but avoid the previous 640-1024px cap that visibly softened output.
+        val thermal = currentThermalStatus()
         val edge = when {
-            manager.isLowRamDevice || availableMiB < 1536L -> 1024
-            availableMiB < 2304L -> 1280
-            availableMiB < 3072L -> 1536
+            manager.isLowRamDevice || availableMiB < 1536L || thermal >= android.os.PowerManager.THERMAL_STATUS_SEVERE -> 1024
+            thermal >= android.os.PowerManager.THERMAL_STATUS_MODERATE || availableMiB < 2304L -> 1280
+            thermal == android.os.PowerManager.THERMAL_STATUS_LIGHT || availableMiB < 3072L -> 1536
             else -> 1792
         }
-        android.util.Log.i(TAG, "AI_MEMORY_IMAGE_SIZE available_mib=$availableMiB low_ram=${manager.isLowRamDevice} max_edge=$edge")
+        android.util.Log.i(TAG, "AI_MEMORY_IMAGE_SIZE available_mib=$availableMiB low_ram=${manager.isLowRamDevice} thermal=${thermalLabel(thermal)} max_edge=$edge")
         return edge
+    }
+
+
+    private fun currentThermalStatus(): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return android.os.PowerManager.THERMAL_STATUS_NONE
+        return try {
+            (getSystemService(POWER_SERVICE) as android.os.PowerManager).currentThermalStatus
+        } catch (_: Exception) {
+            android.os.PowerManager.THERMAL_STATUS_NONE
+        }
+    }
+
+    private fun thermalLabel(status: Int): String = when (status) {
+        android.os.PowerManager.THERMAL_STATUS_LIGHT -> "light"
+        android.os.PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
+        android.os.PowerManager.THERMAL_STATUS_SEVERE -> "severe"
+        android.os.PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
+        android.os.PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
+        android.os.PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
+        else -> "none"
     }
 
     private fun logMemory(stage: String) {
