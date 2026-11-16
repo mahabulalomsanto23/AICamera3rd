@@ -9,6 +9,8 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.util.Log
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import kotlin.math.min
 
@@ -59,7 +61,8 @@ internal class RlfnEnhancer(context: Context) : AutoCloseable {
         val paint = Paint(Paint.FILTER_BITMAP_FLAG)
         val patch = IntArray(tile * tile)
         val sourceRow = IntArray(tile)
-        val input = FloatBuffer.allocate(3 * tile * tile)
+        val input = ByteBuffer.allocateDirect(3 * tile * tile * 4)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer()
         val totalX = (width + stride - 1) / stride
         val totalY = (height + stride - 1) / stride
         val total = totalX * totalY
