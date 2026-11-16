@@ -175,7 +175,7 @@ class ImageProcessingService : Service() {
         // measures luminance first and leaves normally exposed photos untouched.
         try {
             updateProgress("Recovering low-light shadows", 80)
-            val lowLightOutput = LowLightEnhancer.enhance(source, strength)
+            val lowLightOutput = LowLightEnhancer.enhance(current, strength)
             if (lowLightOutput !== source && lowLightOutput !== current) {
                 if (!current.isRecycled) current.recycle()
                 current = lowLightOutput
