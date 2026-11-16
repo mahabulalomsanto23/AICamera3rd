@@ -63,11 +63,15 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
         val input = ByteBuffer.allocateDirect(tile * tile * 3 * 4).order(ByteOrder.nativeOrder())
         val output = ByteBuffer.allocateDirect(tile * 4 * tile * 4 * 3 * 4).order(ByteOrder.nativeOrder())
         val patch = IntArray(tile * tile)
+        val sourceRow = IntArray(tile)
         val rgb = IntArray(tile * 4 * tile * 4)
+        val canvas = android.graphics.Canvas(result)
+        val drawPaint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
         val totalX = (w + stride - 1) / stride
         val totalY = (h + stride - 1) / stride
         val total = totalX * totalY
         var done = 0
+        var inferenceMs = 0L
         val started = SystemClock.elapsedRealtime()
         try {
             var top = 0
@@ -75,10 +79,18 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                 var left = 0
                 while (left < w) {
                     input.clear()
-                    for (y in 0 until tile) for (x in 0 until tile) {
-                        val sx = (left + x - overlap).coerceIn(0, w - 1)
-                        val sy = (top + y - overlap).coerceIn(0, h - 1)
-                        patch[y * tile + x] = source.getPixel(sx, sy)
+                    // Read one contiguous source row per tile row instead of
+                    // 16,384 getPixel JNI calls per tile. Clamp-pad edge pixels.
+                    val sourceX0 = (left - overlap).coerceAtLeast(0)
+                    val sourceX1 = (left - overlap + tile).coerceAtMost(w)
+                    val validWidth = (sourceX1 - sourceX0).coerceAtLeast(1)
+                    for (y in 0 until tile) {
+                        val sourceY = (top + y - overlap).coerceIn(0, h - 1)
+                        source.getPixels(sourceRow, 0, validWidth, sourceX0, sourceY, validWidth, 1)
+                        for (x in 0 until tile) {
+                            val sourceX = (left + x - overlap).coerceIn(0, w - 1)
+                            patch[y * tile + x] = sourceRow[(sourceX - sourceX0).coerceIn(0, validWidth - 1)]
+                        }
                     }
                     if (inputNhwc) {
                         for (p in patch) {
@@ -92,7 +104,9 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                     }
                     input.rewind()
                     output.clear()
+                    val inferenceStarted = SystemClock.elapsedRealtime()
                     interpreter.run(input, output)
+                    inferenceMs += SystemClock.elapsedRealtime() - inferenceStarted
                     output.rewind()
                     if (outputNhwc) {
                         for (i in rgb.indices) {
@@ -120,7 +134,7 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                     val copyH = minOf(stride, h - top)
                     val dst = Rect(left * 2, top * 2, (left + copyW) * 2, (top + copyH) * 2)
                     val srcRect = Rect(0, 0, copyW * 2, copyH * 2)
-                    android.graphics.Canvas(result).drawBitmap(small, srcRect, dst, null)
+                    canvas.drawBitmap(small, srcRect, dst, drawPaint)
                     if (small !== crop && !small.isRecycled) small.recycle()
                     if (!crop.isRecycled) crop.recycle()
                     if (!tileBitmap.isRecycled) tileBitmap.recycle()
@@ -130,7 +144,9 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
                 }
                 top += stride
             }
-            Log.i(TAG, "UPSCALE_DONE input=${w}x$h output=${outW}x$outH tiles=$total elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            val detailStarted = SystemClock.elapsedRealtime()
+            restoreSourceDetail(source, result)
+            Log.i(TAG, "UPSCALE_DONE input=${w}x$h output=${outW}x$outH tiles=$total inference_ms=$inferenceMs detail_ms=${SystemClock.elapsedRealtime() - detailStarted} elapsed_ms=${SystemClock.elapsedRealtime() - started} thread_count=2")
             return result
         } catch (t: Throwable) {
             if (!result.isRecycled) result.recycle()
@@ -138,6 +154,46 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
         }
     }
 
+    /**
+     * Reintroduce restrained source high-frequency structure after SR. This helps
+     * hair, fur, leaves and masonry retain edge character without strong sharpening.
+     */
+    private fun restoreSourceDetail(source: Bitmap, output: Bitmap) {
+        val sw = source.width
+        val sh = source.height
+        val ow = output.width
+        val rowCenter = IntArray(sw)
+        val rowAbove = IntArray(sw)
+        val rowBelow = IntArray(sw)
+        val outputRow = IntArray(ow)
+        for (y in 0 until output.height) {
+            val sy = (y / 2).coerceIn(0, sh - 1)
+            source.getPixels(rowCenter, 0, sw, 0, sy, sw, 1)
+            source.getPixels(rowAbove, 0, sw, 0, (sy - 1).coerceAtLeast(0), sw, 1)
+            source.getPixels(rowBelow, 0, sw, 0, (sy + 1).coerceAtMost(sh - 1), sw, 1)
+            output.getPixels(outputRow, 0, ow, 0, y, ow, 1)
+            for (x in 0 until ow) {
+                val sx = (x / 2).coerceIn(0, sw - 1)
+                val center = rowCenter[sx]
+                val left = rowCenter[(sx - 1).coerceAtLeast(0)]
+                val right = rowCenter[(sx + 1).coerceAtMost(sw - 1)]
+                val up = rowAbove[sx]
+                val down = rowBelow[sx]
+                fun edge(shift: Int): Float {
+                    val c = (center shr shift) and 255
+                    val n = (((left shr shift) and 255) + ((right shr shift) and 255) +
+                        ((up shr shift) and 255) + ((down shr shift) and 255)) * 0.25f
+                    return (c - n).coerceIn(-12f, 12f)
+                }
+                val base = outputRow[x]
+                val r = (((base shr 16) and 255) + edge(16) * 0.22f).toInt().coerceIn(0, 255)
+                val g = (((base shr 8) and 255) + edge(8) * 0.22f).toInt().coerceIn(0, 255)
+                val b = ((base and 255) + edge(0) * 0.22f).toInt().coerceIn(0, 255)
+                outputRow[x] = (base and -0x1000000) or (r shl 16) or (g shl 8) or b
+            }
+            output.setPixels(outputRow, 0, ow, 0, y, ow, 1)
+        }
+    }
     override fun close() = interpreter.close()
 
     companion object {

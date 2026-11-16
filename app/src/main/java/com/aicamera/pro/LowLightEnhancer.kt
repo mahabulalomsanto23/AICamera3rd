@@ -61,9 +61,13 @@ object LowLightEnhancer {
                     val b = p and 255
                     val l = (0.2126f * r + 0.7152f * g + 0.0722f * b) / 255f
                     val lifted = (l * gain).coerceAtMost(1f).toDouble().pow(gamma.toDouble()).toFloat()
-                    // Preserve hue by scaling RGB together; smoothly reduce lift in highlights.
-                    val highlightGuard = (1f - ((l - 0.62f) / 0.38f).coerceIn(0f, 1f) * 0.72f)
-                    val targetL = l + (lifted - l) * highlightGuard
+                    // Smooth shadow-only mask: do not amplify midtone texture/noise
+                    // or wash out already readable faces and foliage.
+                    val shadowPosition = ((0.62f - l) / 0.62f).coerceIn(0f, 1f)
+                    val shadowMask = shadowPosition * shadowPosition * (3f - 2f * shadowPosition)
+                    // Protect lamps, skies and bright skin highlights from clipping.
+                    val highlightGuard = (1f - ((l - 0.68f) / 0.32f).coerceIn(0f, 1f) * 0.92f)
+                    val targetL = l + (lifted - l) * shadowMask * highlightGuard
                     val scale = if (l > 0.015f) targetL / l else 1f + (gain - 1f) * 0.35f
                     val rr = (r * scale).toInt().coerceIn(0, 255)
                     val gg = (g * scale).toInt().coerceIn(0, 255)
@@ -72,7 +76,7 @@ object LowLightEnhancer {
                 }
                 result.setPixels(row, 0, w, 0, y, w, 1)
             }
-            android.util.Log.i("AICameraLowLight", "LOW_LIGHT_APPLIED mean=${analysis.meanLuma} dark_ratio=${analysis.darkRatio} gain=$gain strength=$amount")
+            android.util.Log.i("AICameraLowLight", "LOW_LIGHT_APPLIED mean=${analysis.meanLuma} dark_ratio=${analysis.darkRatio} gain=$gain gamma=$gamma strength=$amount shadow_mask=enabled highlight_protection=enabled")
             return result
         } catch (t: Throwable) {
             if (!result.isRecycled) result.recycle()
