@@ -180,6 +180,7 @@ class ImageProcessingService : Service() {
 
         // Recover genuinely dim scenes before semantic grading. The adaptive stage
         // measures luminance first and leaves normally exposed photos untouched.
+        val lowLightStarted = SystemClock.elapsedRealtime()
         try {
             updateProgress("Recovering low-light shadows", 80)
             val lowLightOutput = LowLightEnhancer.enhance(current, strength)
@@ -187,6 +188,7 @@ class ImageProcessingService : Service() {
                 if (!current.isRecycled) current.recycle()
                 current = lowLightOutput
             }
+            android.util.Log.i(TAG, "BENCHMARK_STAGE low_light_ms=${SystemClock.elapsedRealtime() - lowLightStarted}")
         } catch (t: Throwable) {
             android.util.Log.w(TAG, "LOW_LIGHT_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
         }
