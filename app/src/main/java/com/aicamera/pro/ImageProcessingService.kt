@@ -155,7 +155,7 @@ class ImageProcessingService : Service() {
         updateProgress("AI photo enhancement", 30, true)
         val activeMaxim = maxim ?: throw IllegalStateException("MAXIM model is unavailable")
         var current = try {
-            activeMaxim.enhance(source) { row, total ->
+            activeMaxim.enhance(source, strength) { row, total ->
                 if (row == total || row % 24 == 0) {
                     val percent = 45 + (row * 35 / total.coerceAtLeast(1))
                     updateProgress("AI tone and color analysis", percent)
