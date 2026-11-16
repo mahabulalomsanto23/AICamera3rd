@@ -87,7 +87,7 @@ class ImageProcessingService : Service() {
                         val mask = segmenter.personMask(source)
                         try { PortraitProcessor.apply(source, mask, strength).also { updateProgress("Portrait effect complete", 82) } } finally { if (!mask.isRecycled) mask.recycle() }
                     }
-                    ColorEnhancer.Mode.AI -> processAi(source)
+                    ColorEnhancer.Mode.AI -> processAi(source, strength)
                 }
                 if (mode == ColorEnhancer.Mode.AI && output != null) {
                     output = applyMemorySafeDenoise(output!!)
@@ -138,7 +138,7 @@ class ImageProcessingService : Service() {
         return START_REDELIVER_INTENT
     }
 
-    private fun processAi(source: Bitmap): Bitmap {
+    private fun processAi(source: Bitmap, strength: Float): Bitmap {
         val loadStarted = SystemClock.elapsedRealtime()
         logMemory("before_model_load")
         ensureAiMemoryHeadroom()
@@ -169,6 +169,19 @@ class ImageProcessingService : Service() {
                 android.util.Log.w(TAG, "MAXIM close failed", closeError)
             }
             if (maxim === activeMaxim) maxim = null
+        }
+
+        // Recover genuinely dim scenes before semantic grading. The adaptive stage
+        // measures luminance first and leaves normally exposed photos untouched.
+        try {
+            updateProgress("Recovering low-light shadows", 80)
+            val lowLightOutput = LowLightEnhancer.enhance(source, strength)
+            if (lowLightOutput !== source && lowLightOutput !== current) {
+                if (!current.isRecycled) current.recycle()
+                current = lowLightOutput
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "LOW_LIGHT_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
         }
 
         val memory = android.app.ActivityManager.MemoryInfo()
