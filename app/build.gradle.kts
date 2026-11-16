@@ -2,6 +2,10 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val ciBuildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 13
+val releaseStorePath = System.getenv("ANDROID_SIGNING_KEYSTORE_PATH")
+
 android {
     namespace = "com.aicamera.pro"
     compileSdk = 35
@@ -9,16 +13,33 @@ android {
         applicationId = "com.aicamera.pro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.6.5"
+        // Monotonically increasing CI versionCode prevents accidental downgrade
+        // when a newer APK is installed over an older build.
+        versionCode = 1000 + ciBuildNumber
+        versionName = "1.6.$ciBuildNumber"
     }
-    // Build device-specific APKs: x86_64 for CI emulator, arm64-v8a for OnePlus 8.
     splits {
         abi {
             isEnable = true
             reset()
             include("arm64-v8a", "x86_64")
             isUniversalApk = false
+        }
+    }
+    signingConfigs {
+        create("release") {
+            if (!releaseStorePath.isNullOrBlank()) {
+                storeFile = file(releaseStorePath)
+                storePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
         }
     }
     androidResources { noCompress += "tflite" }
