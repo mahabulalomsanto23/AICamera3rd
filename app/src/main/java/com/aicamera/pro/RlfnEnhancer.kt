@@ -28,13 +28,14 @@ internal class RlfnEnhancer(context: Context) : AutoCloseable {
     private val stride = tile - overlap * 2
 
     init {
-        val model = ModelAsset.map(context, "rlfn_ntire2024_x4.onnx")
+        val mappedModel = ModelAsset.map(context, "rlfn_ntire2024_x4.onnx")
+        val modelBytes = ByteArray(mappedModel.remaining()).also { mappedModel.get(it) }
         val options = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(2)
             setInterOpNumThreads(1)
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         }
-        session = environment.createSession(model, options)
+        session = environment.createSession(modelBytes, options)
         inputName = session.inputNames.first()
         val inputInfo = session.inputInfo[inputName]?.info as? ai.onnxruntime.TensorInfo
             ?: error("RLFN input tensor metadata is unavailable")
@@ -103,7 +104,6 @@ internal class RlfnEnhancer(context: Context) : AutoCloseable {
                         outputs.close()
                     }
                     val pixels = IntArray(tile * 4 * tile * 4)
-                    val planeSize = tile * 4 * tile * 4
                     for (i in pixels.indices) {
                         val r = values[0][0][i / (tile * 4)][i % (tile * 4)].toInt().coerceIn(0, 255)
                         val g = values[0][1][i / (tile * 4)][i % (tile * 4)].toInt().coerceIn(0, 255)
