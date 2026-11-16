@@ -198,6 +198,6 @@ class RealEsrganEnhancer(context: Context) : AutoCloseable {
 
     companion object {
         private const val TAG = "AICameraRealESRGAN"
-        private const val MAX_INPUT_PIXELS = 2_000_000L
+        private const val MAX_INPUT_PIXELS = 1_500_000L
     }
 }
