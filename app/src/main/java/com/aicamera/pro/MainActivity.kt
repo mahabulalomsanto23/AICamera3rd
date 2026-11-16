@@ -41,7 +41,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var aiModeButton: TextView
     private lateinit var vividModeButton: TextView
-    private lateinit var portraitModeButton: TextView
     private var enhancementStrength = 0.72f
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var processingExecutor: ExecutorService
@@ -302,14 +301,8 @@ class MainActivity : AppCompatActivity() {
             updateModeUi()
             setStatus("VIVID • COLOR ENHANCEMENT")
         }
-        portraitModeButton = modeChip("PORTRAIT", false) {
-            mode = ColorEnhancer.Mode.PORTRAIT
-            updateModeUi()
-            setStatus("PORTRAIT • SUBJECT SEPARATION")
-        }
         modeRow.addView(aiModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(4) })
         modeRow.addView(vividModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4); marginEnd = dp(4) })
-        modeRow.addView(portraitModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4) })
         bottomPanel.addView(modeRow, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(5) })
 
         val strengthRow = LinearLayout(this).apply {
@@ -445,7 +438,6 @@ class MainActivity : AppCompatActivity() {
         if (!::aiModeButton.isInitialized || !::vividModeButton.isInitialized) return
         styleModeButton(aiModeButton, mode == ColorEnhancer.Mode.AI)
         styleModeButton(vividModeButton, mode == ColorEnhancer.Mode.VIVID)
-        styleModeButton(portraitModeButton, mode == ColorEnhancer.Mode.PORTRAIT)
     }
 
     private fun styleModeButton(button: TextView, selected: Boolean) {
