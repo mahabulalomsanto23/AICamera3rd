@@ -29,12 +29,15 @@ def download(url: str, path: Path, expected_git_blob: str):
         data = response.read()
     if len(data) < 1024:
         raise RuntimeError(f"Unexpectedly small download: {url} ({len(data)} bytes)")
+    actual_git_blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+    if actual_git_blob != expected_git_blob:
+        raise RuntimeError(f"Upstream file hash mismatch for {path.name}: {actual_git_blob}")
     path.write_bytes(data)
-    print(f"Downloaded {path.name}: {len(data):,} bytes")
+    print(f"Downloaded and verified {path.name}: {len(data):,} bytes")
 
 
-download(SOURCE_URL, SOURCE)
-download(WEIGHT_URL, WEIGHTS)
+download(SOURCE_URL, SOURCE, "1e5190ad7fffd19bb5f065e9c2fdbded16ec2cef")
+download(WEIGHT_URL, WEIGHTS, "ca41d817d30da14e9da7f537a0783205be0a46c2")
 
 # Import the exact upstream architecture without copying or modifying its code.
 namespace = {}
