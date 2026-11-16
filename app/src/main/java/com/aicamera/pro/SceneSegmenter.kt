@@ -141,6 +141,10 @@ class SceneSegmenter(context: Context) : AutoCloseable {
                     saturation = 1.065f; contrast = 1.04f; exposure = 0.5f
                     detailGain = 0.07f; preserveOriginal = 0.02f
                 }
+                126 -> { // animal: preserve fur/feather color while recovering fine texture
+                    saturation = 1.0f; contrast = 1.045f; exposure = 0.5f
+                    detailGain = 0.30f; preserveOriginal = 0.12f
+                }
                 else -> {
                     saturation = 1.035f; contrast = 1.045f; exposure = 0.75f
                     detailGain = 0.11f; preserveOriginal = 0.04f
