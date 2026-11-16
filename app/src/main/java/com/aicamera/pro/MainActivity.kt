@@ -18,6 +18,7 @@ import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -40,6 +41,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var aiModeButton: TextView
     private lateinit var vividModeButton: TextView
+    private lateinit var portraitModeButton: TextView
+    private var enhancementStrength = 0.72f
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var processingExecutor: ExecutorService
 
@@ -299,9 +302,49 @@ class MainActivity : AppCompatActivity() {
             updateModeUi()
             setStatus("VIVID • COLOR ENHANCEMENT")
         }
-        modeRow.addView(aiModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(5) })
-        modeRow.addView(vividModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(5) })
-        bottomPanel.addView(modeRow, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(12) })
+        portraitModeButton = modeChip("PORTRAIT", false) {
+            mode = ColorEnhancer.Mode.PORTRAIT
+            updateModeUi()
+            setStatus("PORTRAIT • SUBJECT SEPARATION")
+        }
+        modeRow.addView(aiModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(4) })
+        modeRow.addView(vividModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4); marginEnd = dp(4) })
+        modeRow.addView(portraitModeButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4) })
+        bottomPanel.addView(modeRow, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(5) })
+
+        val strengthRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val strengthLabel = TextView(this).apply {
+            text = "AI STRENGTH"
+            setTextColor(0xDDFFFFFF.toInt())
+            textSize = 10f
+            letterSpacing = 0.06f
+        }
+        strengthRow.addView(strengthLabel, LinearLayout.LayoutParams(dp(82), dp(34)))
+        val strengthValue = TextView(this).apply {
+            text = "72%"
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            gravity = Gravity.CENTER
+        }
+        val strengthSeek = SeekBar(this).apply {
+            max = 100
+            progress = 72
+            contentDescription = "AI enhancement strength"
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    enhancementStrength = (progress.coerceIn(10, 100)) / 100f
+                    strengthValue.text = "${(enhancementStrength * 100).toInt()}%"
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
+        }
+        strengthRow.addView(strengthSeek, LinearLayout.LayoutParams(0, dp(34), 1f))
+        strengthRow.addView(strengthValue, LinearLayout.LayoutParams(dp(38), dp(34)))
+        bottomPanel.addView(strengthRow, LinearLayout.LayoutParams(-1, dp(36)).apply { bottomMargin = dp(8) })
 
         val captureRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -402,6 +445,7 @@ class MainActivity : AppCompatActivity() {
         if (!::aiModeButton.isInitialized || !::vividModeButton.isInitialized) return
         styleModeButton(aiModeButton, mode == ColorEnhancer.Mode.AI)
         styleModeButton(vividModeButton, mode == ColorEnhancer.Mode.VIVID)
+        styleModeButton(portraitModeButton, mode == ColorEnhancer.Mode.PORTRAIT)
     }
 
     private fun styleModeButton(button: TextView, selected: Boolean) {
@@ -466,6 +510,7 @@ class MainActivity : AppCompatActivity() {
             val serviceIntent = Intent(this, ImageProcessingService::class.java).apply {
                 putExtra(ImageProcessingService.EXTRA_INPUT, input.absolutePath)
                 putExtra(ImageProcessingService.EXTRA_MODE, selectedMode.name)
+                putExtra(ImageProcessingService.EXTRA_STRENGTH, enhancementStrength)
             }
             androidx.core.content.ContextCompat.startForegroundService(this, serviceIntent)
             runOnUiThread {
