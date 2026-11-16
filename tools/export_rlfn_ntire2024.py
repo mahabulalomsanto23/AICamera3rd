@@ -5,7 +5,7 @@ The checkpoint is the official 0.317M-parameter RLFN baseline. It expects RGB
 values in [0,255], takes 128x128 patches, and produces 4x output patches.
 """
 from pathlib import Path
-import urllib.request
+import urllib.request\nimport hashlib
 
 import numpy as np
 import onnx
@@ -16,14 +16,14 @@ import torch.nn as nn
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "app" / "src" / "main" / "assets"
 ASSETS.mkdir(parents=True, exist_ok=True)
-SOURCE_URL = "https://raw.githubusercontent.com/Amazingren/NTIRE2024_ESR/main/models/team00_RLFN.py"
-WEIGHT_URL = "https://raw.githubusercontent.com/Amazingren/NTIRE2024_ESR/main/model_zoo/team00_rlfn.pth"
+SOURCE_URL = "https://raw.githubusercontent.com/Amazingren/NTIRE2024_ESR/6404fa48dde4a4adbf241a51debdc661aef20449/models/team00_RLFN.py"
+WEIGHT_URL = "https://raw.githubusercontent.com/Amazingren/NTIRE2024_ESR/6404fa48dde4a4adbf241a51debdc661aef20449/model_zoo/team00_rlfn.pth"
 SOURCE = ROOT / "tools" / "_ntire_team00_rlfn.py"
 WEIGHTS = ROOT / "tools" / "_ntire_team00_rlfn.pth"
 OUTPUT = ASSETS / "rlfn_ntire2024_x4.onnx"
 
 
-def download(url: str, path: Path):
+def download(url: str, path: Path, expected_git_blob: str):
     request = urllib.request.Request(url, headers={"User-Agent": "AICamera3rd-model-builder/1.0"})
     with urllib.request.urlopen(request, timeout=180) as response:
         data = response.read()
