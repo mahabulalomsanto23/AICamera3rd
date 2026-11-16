@@ -348,36 +348,49 @@ class ImageProcessingService : Service() {
         val availableMiB = info.availMem / (1024L * 1024L)
         val pixels = input.width.toLong() * input.height.toLong()
         val thermal = currentThermalStatus()
-        // The previous 2MP/2500MiB/moderate-thermal gate silently skipped
-        // Real-ESRGAN for most full-resolution OnePlus 8 photos. Decode is now
-        // bounded to ~1.5MP, so allow the real SR model to run in normal and
-        // moderately warm conditions; stop only when memory/thermal risk is real.
         val thermalBudgetExceeded = thermal >= android.os.PowerManager.THERMAL_STATUS_SEVERE
         val warmDeviceBudgetExceeded = thermal == android.os.PowerManager.THERMAL_STATUS_LIGHT &&
             availableMiB < 2400L
         if (info.lowMemory || availableMiB < 2200L || pixels > 1_500_000L ||
             thermalBudgetExceeded || warmDeviceBudgetExceeded) {
-            android.util.Log.i(TAG, "REAL_ESRGAN_SKIP available_mib=$availableMiB low_memory=${info.lowMemory} pixels=$pixels thermal=${thermalLabel(thermal)}")
+            android.util.Log.i(TAG, "AI_SR_SKIP available_mib=$availableMiB low_memory=${info.lowMemory} pixels=$pixels thermal=${thermalLabel(thermal)}")
             return input
         }
-        var enhancer: RealEsrganEnhancer? = null
+
         val started = SystemClock.elapsedRealtime()
+        var rlfn: RlfnEnhancer? = null
         try {
-            updateProgress("AI super resolution • loading model", 95)
-            enhancer = RealEsrganEnhancer(this)
-            val result = enhancer.enhance(input) { done, total ->
+            updateProgress("AI detail reconstruction • loading RLFN", 94)
+            rlfn = RlfnEnhancer(this)
+            val result = rlfn.enhance(input) { done, total ->
                 if (done == total || done % 4 == 0) {
-                    updateProgress("AI super resolution • $done/$total", 95 + (done * 2 / total.coerceAtLeast(1)))
+                    updateProgress("AI detail reconstruction • $done/$total", 94 + done * 2 / total.coerceAtLeast(1))
                 }
             }
             if (result !== input && !input.isRecycled) input.recycle()
-            android.util.Log.i(TAG, "REAL_ESRGAN_DONE elapsed_ms=${SystemClock.elapsedRealtime() - started} available_mib=$availableMiB thermal=${thermalLabel(thermal)}")
+            android.util.Log.i(TAG, "RLFN_PRIMARY_DONE elapsed_ms=${SystemClock.elapsedRealtime() - started} available_mib=$availableMiB thermal=${thermalLabel(thermal)}")
             return result
         } catch (t: Throwable) {
-            android.util.Log.w(TAG, "REAL_ESRGAN_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
+            android.util.Log.w(TAG, "RLFN_FAILED_FALLBACK_TO_REAL_ESRGAN reason=${t.javaClass.simpleName}: ${t.message}", t)
+        } finally {
+            try { rlfn?.close() } catch (_: Exception) {}
+            System.gc()
+        }
+
+        // Keep the already-bundled Qualcomm model as a resilient secondary path.
+        var legacy: RealEsrganEnhancer? = null
+        try {
+            updateProgress("AI detail reconstruction • fallback model", 96)
+            legacy = RealEsrganEnhancer(this)
+            val result = legacy.enhance(input)
+            if (result !== input && !input.isRecycled) input.recycle()
+            android.util.Log.i(TAG, "REAL_ESRGAN_FALLBACK_DONE elapsed_ms=${SystemClock.elapsedRealtime() - started}")
+            return result
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "REAL_ESRGAN_FALLBACK_FAILED reason=${t.javaClass.simpleName}: ${t.message}", t)
             return input
         } finally {
-            try { enhancer?.close() } catch (_: Exception) {}
+            try { legacy?.close() } catch (_: Exception) {}
             System.gc()
         }
     }
