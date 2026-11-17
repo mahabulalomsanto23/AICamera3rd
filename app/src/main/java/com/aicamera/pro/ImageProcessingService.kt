@@ -196,7 +196,7 @@ class ImageProcessingService : Service() {
         val memory = android.app.ActivityManager.MemoryInfo()
         (getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(memory)
         val availableMiB = memory.availMem / (1024L * 1024L)
-        if (!memory.lowMemory && availableMiB >= 1800L) {
+        if (!memory.lowMemory && availableMiB >= 900L) {
             var segmenter: SceneSegmenter? = null
             try {
                 updateProgress("Understanding scene regions", 82)
@@ -215,9 +215,25 @@ class ImageProcessingService : Service() {
                 System.gc()
             }
 
+            // AI mode previously never invoked ColorEnhancer: the learned MAXIM
+            // output and semantic pass were saved without the dedicated color stage.
+            // Apply the existing offline adaptive color pipeline before face protection.
+            val colorStarted = SystemClock.elapsedRealtime()
+            try {
+                updateProgress("Balancing scene color and vibrance", 85)
+                val colorOutput = ColorEnhancer.enhance(current, ColorEnhancer.Mode.AI)
+                if (colorOutput !== current) {
+                    if (!current.isRecycled) current.recycle()
+                    current = colorOutput
+                }
+                android.util.Log.i(TAG, "AI_COLOR_DONE elapsed_ms=${SystemClock.elapsedRealtime() - colorStarted}")
+            } catch (t: Throwable) {
+                android.util.Log.w(TAG, "AI_COLOR_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
+            }
+
             var faceProtector: FaceProtector? = null
             try {
-                updateProgress("Protecting natural face details", 86)
+                updateProgress("Protecting natural face details", 87)
                 faceProtector = FaceProtector()
                 val faceOutput = faceProtector.protect(source, current)
                 if (faceOutput !== current) {
