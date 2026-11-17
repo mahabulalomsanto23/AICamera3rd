@@ -83,6 +83,15 @@ class SceneSegmenter(context: Context) : AutoCloseable {
             }
         }
 
+        // Record what the segmentation model actually recognized. This makes
+        // incorrect/empty masks visible in device logs instead of reporting a
+        // generic "scene-aware done" for every input.
+        val classCounts = HashMap<Int, Int>()
+        for (label in labels) classCounts[label] = (classCounts[label] ?: 0) + 1
+        val recognized = listOf(2, 4, 9, 12, 17, 21, 66, 72, 92, 126)
+            .associateWith { classCounts[it] ?: 0 }
+        android.util.Log.i("AICameraScene", "SCENE_LABEL_COUNTS input=${inputW}x${inputH} output=${outputW}x${outputH} labels=$recognized unique=${classCounts.size}")
+
         val w = enhanced.width; val h = enhanced.height
         val src = IntArray(w * h); val dst = IntArray(w * h)
         source.getPixels(src, 0, w, 0, 0, w, h); enhanced.getPixels(dst, 0, w, 0, 0, w, h)
