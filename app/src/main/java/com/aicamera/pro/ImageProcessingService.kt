@@ -215,22 +215,6 @@ class ImageProcessingService : Service() {
                 System.gc()
             }
 
-            // AI mode previously never invoked ColorEnhancer: the learned MAXIM
-            // output and semantic pass were saved without the dedicated color stage.
-            // Apply the existing offline adaptive color pipeline before face protection.
-            val colorStarted = SystemClock.elapsedRealtime()
-            try {
-                updateProgress("Balancing scene color and vibrance", 85)
-                val colorOutput = ColorEnhancer.enhance(current, ColorEnhancer.Mode.AI)
-                if (colorOutput !== current) {
-                    if (!current.isRecycled) current.recycle()
-                    current = colorOutput
-                }
-                android.util.Log.i(TAG, "AI_COLOR_DONE elapsed_ms=${SystemClock.elapsedRealtime() - colorStarted}")
-            } catch (t: Throwable) {
-                android.util.Log.w(TAG, "AI_COLOR_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
-            }
-
             var faceProtector: FaceProtector? = null
             try {
                 updateProgress("Protecting natural face details", 87)
@@ -251,6 +235,20 @@ class ImageProcessingService : Service() {
         } else {
             android.util.Log.i(TAG, "SCENE_FACE_SKIP available_mib=$availableMiB low_memory=${memory.lowMemory}")
         }
+        // Color grading is core AI-mode work, independent of ADE20K memory availability.
+        val colorStarted = SystemClock.elapsedRealtime()
+        try {
+            updateProgress("Reconstructing natural scene color", 85)
+            val colorOutput = ColorEnhancer.enhance(current, ColorEnhancer.Mode.AI)
+            if (colorOutput !== current) {
+                if (!current.isRecycled) current.recycle()
+                current = colorOutput
+            }
+            android.util.Log.i(TAG, "AI_COLOR_DONE elapsed_ms=${SystemClock.elapsedRealtime() - colorStarted}")
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "AI_COLOR_SKIPPED reason=${t.javaClass.simpleName}: ${t.message}", t)
+        }
+
         logMemory("after_ai_stages")
         updateProgress("AI enhancement complete", 92)
         android.util.Log.i(TAG, "BENCHMARK_STAGE ai_pipeline_ms=${SystemClock.elapsedRealtime() - enhanceStarted}")
