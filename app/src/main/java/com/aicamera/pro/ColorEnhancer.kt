@@ -31,14 +31,14 @@ object ColorEnhancer {
         }
         val ar = sr / samples; val ag = sg / samples; val ab = sb / samples
         val neutral = ((ar + ag + ab) / 3.0).coerceAtLeast(0.001)
-        val balanceStrength = if (mode == Mode.AI) 0.16 else 0.06
+        val balanceStrength = if (mode == Mode.AI) 0.07 else 0.06
         val wr = (1.0 + ((neutral / ar.coerceAtLeast(0.001)) - 1.0) * balanceStrength).coerceIn(0.94, 1.06).toFloat()
         val wg = (1.0 + ((neutral / ag.coerceAtLeast(0.001)) - 1.0) * balanceStrength).coerceIn(0.94, 1.06).toFloat()
         val wb = (1.0 + ((neutral / ab.coerceAtLeast(0.001)) - 1.0) * balanceStrength).coerceIn(0.94, 1.06).toFloat()
 
         val vivid = mode == Mode.VIVID
-        val saturationBase = if (vivid) 1.48f else 1.30f
-        val vibrance = if (vivid) 0.30f else 0.24f
+        val saturationBase = if (vivid) 1.48f else 1.16f
+        val vibrance = if (vivid) 0.30f else 0.20f
         val contrast = if (vivid) 1.055f else 1.035f
         val warmth = if (vivid) 0.002f else 0.006f
 
