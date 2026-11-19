@@ -8,9 +8,16 @@ PiSA-SR is a one-step diffusion super-resolution method with separate pixel-fide
 
 ## Snapdragon 865 compatibility
 
-The OnePlus 8 platform is Snapdragon 865 / SM8250 / Hexagon V66. Qualcomm's current QAIRT device matrix lists SM8250 as an Android target (SoC model 21, HTP V66). Therefore, the chipset is not categorically excluded from QNN.
+The OnePlus 8 platform is Snapdragon 865 / SM8250 / Hexagon V66. Qualcomm's QAIRT device matrix lists SM8250 as an Android target (SoC model 21, HTP V66). This means the chipset is supported by the proprietary Qualcomm QAIRT/QNN SDK at the platform level; it does not mean every open-source QNN integration or every precompiled model supports it.
 
-However, the public PiSA-Lite QNN context binaries are compiled specifically for Snapdragon 8 Gen 3 / SM8650. They must not be copied into this app or loaded on SM8250. The PiSA-Lite README says its ONNX graphs need to be compiled separately for each target Snapdragon using Qualcomm AI Hub / QAIRT / QNN tooling.
+Important distinctions:
+
+- **QAIRT SDK:** lists SM8250 / V66 as an Android target.
+- **Qualcomm AI Hub device catalog:** the published chipset attribute list includes Snapdragon 865+ but does not list the base Snapdragon 865. Do not assume AI Hub Workbench can compile/profile directly against a OnePlus 8 target.
+- **ExecuTorch QNN backend:** its current documented supported mobile SoCs do not include SM8250. Do not assume its standard QNN backend can target this phone without upstream support or custom work.
+- **PiSA-Lite binaries:** the public QNN context binaries are compiled specifically for Snapdragon 8 Gen 3 / SM8650. They must not be copied into this app or loaded on SM8250.
+
+Therefore, the practical route is a direct QAIRT/QNN SDK integration and a separately compiled SM8250 package, subject to access to a compatible SDK release and a real OnePlus 8 for validation. AI Hub cloud compilation is not currently a confirmed route for the base 865.
 
 ## Required target package
 
@@ -36,13 +43,17 @@ Do not download or bundle the SM8650 binaries as a fallback. If no validated SM8
 
 ## Blockers before implementation can be enabled
 
-1. Compile PiSA-Lite's ONNX graphs for SM8250 / HTP V66 with a compatible Qualcomm QAIRT/QNN toolchain.
-2. Verify graph operators, quantization and context binaries on an actual OnePlus 8.
-3. Obtain/ship the matching QNN Android runtime and native JNI runner under the applicable Qualcomm terms.
-4. Confirm the upstream PiSA-Lite weight redistribution rights; its model card uses `license: other` and explicitly warns that upstream component terms apply.
+1. Obtain a compatible Qualcomm QAIRT/QNN SDK release and confirm that its HTP runtime supports the OnePlus 8's SM8250 / V66 firmware.
+2. Compile PiSA-Lite's ONNX graphs for SM8250 / HTP V66. Do not assume AI Hub Workbench exposes a base-Snapdragon-865 target; its published device attributes list 865+ but not base 865.
+3. Verify graph operators, quantization and context binaries on an actual OnePlus 8. The current ExecuTorch QNN backend's documented chipset list does not include SM8250, so a direct QNN SDK C++/JNI runner or a separately validated backend is required.
+4. Obtain/ship the matching QNN Android runtime and native JNI runner under the applicable Qualcomm terms.
+5. Confirm the upstream PiSA-Lite weight redistribution rights; its model card uses `license: other` and explicitly warns that upstream component terms apply.
 
 ## References
 
 - Official PiSA-SR: https://github.com/csslc/PiSA-SR
 - PiSA-Lite model card and Android integration notes: https://huggingface.co/Alptekinege/PiSA-Lite
 - Qualcomm QAIRT supported-device matrix: https://docs.qualcomm.com/nav/home/QNN_general_overview.html?product=924033590759186372
+- Qualcomm AI Hub device attributes: https://dev.aihub.qualcomm.com/docs/hub/generated/qai_hub.Device.html
+- Qualcomm AI Hub device selection: https://workbench.aihub.qualcomm.com/docs/hub/devices.html
+- ExecuTorch QNN backend support matrix: https://android.googleid.googlesource.com/platform/external/executorch/+/HEAD/.wiki/backends/qnn/overview.md
