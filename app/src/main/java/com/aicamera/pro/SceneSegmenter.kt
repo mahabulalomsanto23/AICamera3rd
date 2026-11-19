@@ -88,7 +88,7 @@ class SceneSegmenter(context: Context) : AutoCloseable {
         // generic "scene-aware done" for every input.
         val classCounts = HashMap<Int, Int>()
         for (label in labels) classCounts[label] = (classCounts[label] ?: 0) + 1
-        val recognized = listOf(2, 4, 9, 12, 17, 21, 66, 72, 92, 126)
+        val recognized = listOf(1, 2, 4, 6, 9, 12, 16, 17, 21, 29, 34, 46, 48, 52, 60, 66, 68, 72, 91, 92, 94, 113, 126, 128)
             .associateWith { classCounts[it] ?: 0 }
         android.util.Log.i("AICameraScene", "SCENE_LABEL_COUNTS input=${inputW}x${inputH} output=${outputW}x${outputH} labels=$recognized unique=${classCounts.size}")
 
@@ -122,17 +122,17 @@ class SceneSegmenter(context: Context) : AutoCloseable {
             val detailGain: Float
             val preserveOriginal: Float
             when (cls) {
-                2 -> { // sky: protect highlights, gently restore blue/cyan
-                    saturation = 1.075f; contrast = 1.035f; exposure = 1.0f
-                    detailGain = 0.015f; preserveOriginal = 0.04f
+                2 -> { // sky: recover blue/cyan separation while rolling off bright clouds
+                    saturation = 1.15f; contrast = 1.055f; exposure = 0.5f
+                    detailGain = 0.025f; preserveOriginal = 0.025f
                 }
-                4, 9, 17, 72 -> { // trees, grass, plants
-                    saturation = 1.105f; contrast = 1.055f; exposure = 1.5f
-                    detailGain = 0.22f; preserveOriginal = 0.02f
+                4, 9, 17, 29, 68, 72 -> { // trees, grass, plants, fields and hills
+                    saturation = 1.17f; contrast = 1.065f; exposure = 1.8f
+                    detailGain = 0.30f; preserveOriginal = 0.015f
                 }
-                66 -> { // flowers: richer but not clipped
-                    saturation = 1.12f; contrast = 1.025f; exposure = 0.5f
-                    detailGain = 0.08f; preserveOriginal = 0.02f
+                66 -> { // flowers: restore muted petal color without clipping
+                    saturation = 1.20f; contrast = 1.035f; exposure = 0.5f
+                    detailGain = 0.12f; preserveOriginal = 0.015f
                 }
                 12 -> { // people: natural skin, softer contrast, no saturation push
                     saturation = 0.985f; contrast = 1.015f; exposure = 1.0f
@@ -142,17 +142,17 @@ class SceneSegmenter(context: Context) : AutoCloseable {
                     saturation = 1.015f; contrast = 1.025f; exposure = 0.5f
                     detailGain = 0.045f; preserveOriginal = 0.22f
                 }
-                1, 6 -> { // buildings and roads: recover midtone structure
-                    saturation = 1.025f; contrast = 1.075f; exposure = 1.0f
-                    detailGain = 0.20f; preserveOriginal = 0.0f
+                1, 6, 34, 42, 48, 52, 91, 94 -> { // buildings, roads, rock and ground textures
+                    saturation = 1.045f; contrast = 1.095f; exposure = 1.0f
+                    detailGain = 0.28f; preserveOriginal = 0.0f
                 }
-                21 -> { // water
-                    saturation = 1.065f; contrast = 1.04f; exposure = 0.5f
-                    detailGain = 0.07f; preserveOriginal = 0.02f
+                21, 26, 60, 113, 128 -> { // water, sea, river, waterfall and lake
+                    saturation = 1.12f; contrast = 1.055f; exposure = 0.5f
+                    detailGain = 0.10f; preserveOriginal = 0.02f
                 }
-                126 -> { // animal: preserve fur/feather color while recovering fine texture
-                    saturation = 1.0f; contrast = 1.045f; exposure = 0.5f
-                    detailGain = 0.30f; preserveOriginal = 0.12f
+                126 -> { // animal: protect natural fur/feather hue and strengthen micro-texture
+                    saturation = 1.025f; contrast = 1.06f; exposure = 0.5f
+                    detailGain = 0.38f; preserveOriginal = 0.10f
                 }
                 else -> {
                     saturation = 1.035f; contrast = 1.045f; exposure = 0.75f
@@ -175,7 +175,7 @@ class SceneSegmenter(context: Context) : AutoCloseable {
                 val sy = y.coerceIn(1, h - 2)
                 val neighborhood = (sourceY[sy * w + sx - 1] + sourceY[sy * w + sx + 1] +
                     sourceY[(sy - 1) * w + sx] + sourceY[(sy + 1) * w + sx]) * 0.25f
-                ((centerY - neighborhood) * detailGain).coerceIn(-14f, 14f)
+                ((centerY - neighborhood) * detailGain).coerceIn(-18f, 18f)
             } else 0f
 
             // Scale chroma around the newly toned luminance, preserving hue and
